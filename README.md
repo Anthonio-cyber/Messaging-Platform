@@ -68,7 +68,7 @@ instead of instantly, and typing indicators and live presence are unavailable. T
 the user which mode it is in rather than pretending.
 
 Every persistent host — the Docker image, a VPS, Fly, Render — keeps Socket.IO and true push,
-with no code change. See `docs/DEPLOYMENT.md`.
+with no code change. Step-by-step instructions are in `docs/VERCEL.md`.
 
 ### With Docker
 
