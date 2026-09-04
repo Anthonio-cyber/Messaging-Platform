@@ -243,17 +243,30 @@ authRouter.post(
   '/password/reset/context',
   asyncRoute(async (req, res) => {
     const { token } = parseBody(z.object({ token: z.string().min(10).max(200) }), req.body);
-    const row = await one<{ user_id: string; username: string; vault_salt: string; recovery_codes: number }>(
-      `SELECT t.user_id, u.username, u.vault_salt,
+    const row = await one<{
+      user_id: string;
+      username: string;
+      vault_salt: string;
+      public_key: string | null;
+      encrypted_private_key: string | null;
+      recovery_codes: number;
+    }>(
+      `SELECT t.user_id, u.username, u.vault_salt, u.public_key, u.encrypted_private_key,
               (SELECT count(*)::int FROM recovery_codes rc WHERE rc.user_id = u.id AND rc.used_at IS NULL) AS recovery_codes
          FROM auth_tokens t JOIN users u ON u.id = t.user_id
         WHERE t.token_hash = $1 AND t.purpose = 'password_reset' AND t.used_at IS NULL AND t.expires_at > now()`,
       [hashToken(token)],
     );
     if (!row) throw badRequest('This reset link has expired or has already been used.');
+
+    // The sealed private key is returned so a recovery code can re-open it in the browser.
+    // The blob is useless without the vault key, which only a recovery code (or the old
+    // passphrase) can produce, and only the holder of the emailed token gets this far.
     res.json({
       username: row.username,
       currentVaultSalt: row.vault_salt,
+      publicKey: row.public_key,
+      encryptedPrivateKey: row.encrypted_private_key,
       recoveryCodesAvailable: Number(row.recovery_codes) > 0,
     });
   }),
