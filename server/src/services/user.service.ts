@@ -123,12 +123,9 @@ export async function toPublicProfile(
   const showLastSeen = !blocks.either && allows(privacy.last_seen_visible, isSelf, isContact);
   const showAvatar = !blocks.either && allows(privacy.avatar_visible, isSelf, isContact);
 
+  // "approved" still permits an approach — it just files a request first.
   const canMessage =
-    isSelf
-      ? false
-      : !blocks.either &&
-        target.status === 'active' &&
-        (privacy.who_can_contact === 'everyone' || (privacy.who_can_contact === 'approved' ? true : false));
+    !isSelf && !blocks.either && target.status === 'active' && privacy.who_can_contact !== 'nobody';
 
   return {
     id: target.id,

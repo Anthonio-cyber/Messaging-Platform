@@ -625,8 +625,11 @@ export async function listConversations(
           LIMIT 1
        ) other ON mine.type = 'direct'
        LEFT JOIN privacy_settings op ON op.user_id = other.id
-       LEFT JOIN message_requests mr
-              ON mr.conversation_id = mine.conversation_id AND mr.status = 'pending'
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.status, r.sender_id FROM message_requests r
+          WHERE r.conversation_id = mine.conversation_id AND r.status = 'pending'
+          ORDER BY r.created_at DESC LIMIT 1
+       ) mr ON TRUE
       WHERE ($2::boolean OR mine.archived_at IS NULL)
       ORDER BY mine.pinned_at DESC NULLS LAST, mine.last_message_at DESC NULLS LAST, mine.created_at DESC`,
     [viewerId, options.includeArchived ?? false],
