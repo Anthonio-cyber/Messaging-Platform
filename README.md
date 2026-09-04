@@ -25,7 +25,7 @@ you@veylo.chat  ←  the only thing you share
 | Messaging | Direct and group conversations, replies, edits, deletes (for me / for everyone), reactions, pins, forwards, copy, attachments, message search over decrypted history |
 | Message requests | A first approach queues as a request; accept, decline, or block. Nothing lands in an inbox uninvited |
 | Groups | Owner/admin/member roles, permission matrix, invite links, add/remove, ownership transfer, leave, delete |
-| Realtime | Socket.IO with per-socket authorisation, typing indicators, presence, delivery and read receipts, live notifications |
+| Realtime | Socket.IO with per-socket authorisation, typing indicators, presence, delivery and read receipts, live notifications — with an automatic polling fallback for hosts that cannot hold a WebSocket |
 | Privacy | Who can contact you, discovery, online status, last seen, avatar, profile visibility, read receipts, typing indicators — enforced in the serializer and in SQL |
 | Safety | Blocking, abuse reports with optional reporter-supplied excerpts, report queue |
 | Admin | Role-gated dashboard: stats, user management, suspend/ban/restore, role changes, report review, security feed, audit log |
@@ -58,6 +58,17 @@ Open <http://localhost:5173>.
 
 `npm run seed` prints the sign-in details it created. Those accounts exist only for local
 development — the seed script refuses to run when `NODE_ENV=production`.
+
+### Deploying to Vercel
+
+Vercel serves the bundle from its CDN and runs the API as a serverless function, so there is
+no container to wake — but serverless cannot hold a WebSocket open. On Vercel the browser
+detects that and falls back to polling `/api/sync`: messages arrive within a few seconds
+instead of instantly, and typing indicators and live presence are unavailable. The app tells
+the user which mode it is in rather than pretending.
+
+Every persistent host — the Docker image, a VPS, Fly, Render — keeps Socket.IO and true push,
+with no code change. See `docs/DEPLOYMENT.md`.
 
 ### With Docker
 

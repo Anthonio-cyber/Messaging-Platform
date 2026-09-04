@@ -825,3 +825,88 @@ describe('account recovery', () => {
     assert.equal(remaining.rows[0]!.count, 7);
   });
 });
+
+describe('polling transport (/api/sync)', () => {
+  let sender: Account;
+  let recipient: Account;
+  let conversationId: string;
+
+  before(async () => {
+    sender = await registerAccount('poller', 'Polling Sender');
+    recipient = await registerAccount('pollee', 'Polling Recipient');
+    await recipient.client.patch('/api/users/me/privacy', { whoCanContact: 'everyone' });
+    const opened = await sender.client.post<{ conversation: { id: string } }>(
+      '/api/conversations/direct',
+      { identifier: 'pollee' },
+    );
+    conversationId = opened.body.conversation.id;
+  });
+
+  test('returns new messages to a client that cannot hold a socket', async () => {
+    const before = new Date().toISOString();
+
+    const members = await sender.client.get<{ members: Array<{ userId: string; publicKey: string }> }>(
+      `/api/conversations/${conversationId}/members`,
+    );
+    const plaintext = 'Delivered without a websocket.';
+    const encrypted = await crypto.encryptForMembers(
+      { text: plaintext },
+      members.body.members.map((m) => ({ userId: m.userId, publicKey: m.publicKey })),
+    );
+    await sender.client.post(`/api/chat/${conversationId}/messages`, {
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+    });
+
+    const sync = await recipient.client.get<{
+      now: string;
+      messages: Array<{ conversationId: string; message: { ciphertext: string; nonce: string; wrappedKey: string } }>;
+      pendingRequests: number;
+      revision: string;
+    }>(`/api/sync?since=${encodeURIComponent(before)}`);
+
+    assert.equal(sync.status, 200, `sync failed: ${JSON.stringify(sync.body)}`);
+    assert.equal(sync.body.messages.length, 1);
+    assert.equal(sync.body.messages[0]!.conversationId, conversationId);
+
+    // The polled payload carries the recipient's own sealed key and decrypts to the original.
+    const decrypted = (await crypto.decryptMessage(
+      sync.body.messages[0]!.message.ciphertext,
+      sync.body.messages[0]!.message.nonce,
+      sync.body.messages[0]!.message.wrappedKey,
+      recipient.publicKey,
+      recipient.privateKey,
+    )) as { text: string };
+    assert.equal(decrypted.text, plaintext);
+  });
+
+  test('returns nothing for a window with no activity', async () => {
+    const sync = await recipient.client.get<{ messages: unknown[]; notifications: unknown[] }>(
+      `/api/sync?since=${encodeURIComponent(new Date().toISOString())}`,
+    );
+    assert.equal(sync.status, 200);
+    assert.equal(sync.body.messages.length, 0);
+    assert.equal(sync.body.notifications.length, 0);
+  });
+
+  test('never returns a message the caller holds no key for', async () => {
+    const outsider = await registerAccount('eavesdropper', 'Eavesdropper');
+    const sync = await outsider.client.get<{ messages: Array<{ conversationId: string }> }>(
+      `/api/sync?since=${encodeURIComponent(new Date(Date.now() - 600_000).toISOString())}`,
+    );
+    assert.equal(sync.status, 200);
+    assert.equal(
+      sync.body.messages.some((entry) => entry.conversationId === conversationId),
+      false,
+      'sync must be scoped to the caller\'s own conversations',
+    );
+  });
+
+  test('requires a session', async () => {
+    const anonymous = new ApiClient(server.url);
+    await anonymous.bootstrap();
+    const sync = await anonymous.get('/api/sync');
+    assert.equal(sync.status, 401);
+  });
+});

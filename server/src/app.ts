@@ -18,6 +18,7 @@ import { safetyRouter } from './routes/safety.routes.js';
 import { notificationRouter } from './routes/notification.routes.js';
 import { fileRouter } from './routes/file.routes.js';
 import { adminRouter } from './routes/admin.routes.js';
+import { syncRouter } from './routes/sync.routes.js';
 import { pool } from './db/pool.js';
 
 export function createApp(): Express {
@@ -76,6 +77,7 @@ export function createApp(): Express {
   app.use('/api/safety', safetyRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/sync', syncRouter);
 
   serveWebApp(app);
 
@@ -91,6 +93,9 @@ export function createApp(): Express {
  * simply have no build here, and this is a no-op.
  */
 function serveWebApp(app: Express): void {
+  // On a platform that serves the bundle from a CDN (Vercel), there is nothing to serve here.
+  if (process.env.VEYLO_SKIP_STATIC === 'true' || process.env.VERCEL === '1') return;
+
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.resolve(here, '../../web/dist'),

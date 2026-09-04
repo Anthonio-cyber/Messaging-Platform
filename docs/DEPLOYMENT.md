@@ -15,10 +15,8 @@ You need:
 - **A domain with TLS** — Veylo refuses to boot in production unless `COOKIE_SECURE=true`
 - **An SMTP provider** — for password resets, address confirmation and security alerts
 
-WebSockets must survive your proxy. Serverless platforms that terminate long-lived
-connections (classic Vercel or Netlify functions) cannot host the realtime server; put the API
-on a platform that supports persistent processes and, if you like, host the static bundle
-anywhere.
+WebSockets must survive your proxy. Serverless platforms cannot hold one open — see
+**Serverless (Vercel)** below for what the app does about that.
 
 ---
 
@@ -35,6 +33,36 @@ docker run --env-file .env -p 4000:4000 veylo
 ```
 
 Point your load balancer at port 4000 and terminate TLS there.
+
+### Serverless (Vercel)
+
+`vercel.json` and `api/index.js` are committed, so the repository deploys to Vercel as-is: the
+bundle is served from the CDN and the Express app runs as a serverless function. Nothing has to
+wake up, so there is no container cold start — function cold starts are in the hundreds of
+milliseconds.
+
+**The trade-off is realtime.** A serverless function cannot hold a WebSocket, so Socket.IO does
+not run there. The browser tries a socket, sees it fail, and falls back to polling `/api/sync`
+(`web/src/lib/realtime.ts`). Both transports feed the same handlers, so everything downstream
+is identical. What changes for the user:
+
+| | WebSocket | Polling fallback |
+| --- | --- | --- |
+| New messages | Instant push | Within ~3 seconds |
+| Delivery and read receipts | Instant | Within ~3 seconds |
+| Typing indicators | Yes | No |
+| Live presence | Yes | No |
+
+The sidebar says which mode is active rather than leaving the user to guess.
+
+Set the environment variables in **Project → Settings → Environment Variables**. There is no
+build-time secret: `npm run build` runs `tsc` and `vite`, neither of which reads them, so a
+project missing its variables still builds — and then fails at request time, which is the
+intended behaviour rather than a silent half-configured deployment.
+
+Polling costs one function invocation per client every few seconds. That is comfortable on a
+small deployment and is the thing to watch as usage grows; a persistent host removes it
+entirely.
 
 ### Split frontend and backend
 
@@ -206,7 +234,8 @@ Veylo runs fine on a single instance for a long time. When you outgrow one:
 
 1. **Socket.IO needs an adapter.** Events are emitted to rooms; with several instances, a user
    connected to instance B will not receive an event emitted on instance A. Add
-   `@socket.io/redis-adapter` and attach it in `server/src/realtime/socket.ts`.
+   `@socket.io/redis-adapter` and attach it in `server/src/realtime/socket.ts`. The polling
+   fallback has no such problem — it reads from the database, which every instance shares.
 2. **Rate limiting needs a shared store.** The in-memory limiter multiplies the effective
    limit by the instance count. The `login_attempts` table already works across instances, so
    sign-in protection stays correct — but move the fast path to Redis.

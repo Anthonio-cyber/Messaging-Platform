@@ -276,7 +276,31 @@ No admin route exposes message content — the server cannot decrypt it.
 
 ## Realtime
 
-Socket.IO at path `/realtime`, authenticated by the session cookie during the handshake. An
+Two transports carry the same events. Clients prefer the socket and fall back automatically.
+
+### `GET /api/sync?since=<ISO timestamp>`
+
+The polling transport, for hosts that cannot hold a WebSocket. Returns everything addressed to
+the caller that changed since `since`:
+
+```json
+{ "now": "2026-09-04T22:00:00.000Z",
+  "messages": [{ "conversationId": "…", "message": { "…": "with your own wrappedKey" } }],
+  "deleted": [{ "conversationId": "…", "messageId": "…" }],
+  "notifications": [ … ],
+  "pendingRequests": 0,
+  "revision": "…" }
+```
+
+`revision` is a cheap fingerprint of the caller's conversation list; when it changes, refetch
+the sidebar. Every row is scoped to the caller's own membership — this endpoint never returns a
+message they hold no key for.
+
+Typing indicators and live presence have no polling equivalent; they are socket-only.
+
+### Socket.IO
+
+At path `/realtime`, authenticated by the session cookie during the handshake. An
 unauthenticated socket never connects.
 
 **Emitted by the server**

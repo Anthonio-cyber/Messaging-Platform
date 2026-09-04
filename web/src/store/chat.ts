@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import type { Socket } from 'socket.io-client';
 import {
   api,
   type ApiMessage,
@@ -8,7 +7,7 @@ import {
   type ConversationSummary,
   type MessageRequest,
 } from '../lib/api';
-import { connectSocket, disconnectSocket, getSocket } from '../lib/socket';
+import { realtime, type RealtimeHandlers, type TransportMode } from '../lib/realtime';
 import {
   decryptMessage,
   encryptForMembers,
@@ -47,6 +46,8 @@ interface ChatState {
   loadingMessages: Record<string, boolean>;
   sending: boolean;
   connected: boolean;
+  /** Which transport is live. "polling" means the host cannot hold a WebSocket. */
+  transport: TransportMode;
   showArchived: boolean;
 
   init: () => void;
@@ -111,6 +112,7 @@ function mergeMessage(list: DecryptedMessage[], incoming: DecryptedMessage): Dec
 }
 
 let socketBound = false;
+let typingSweep: number | undefined;
 
 export const useChat = create<ChatState>((set, get) => ({
   conversations: [],
@@ -128,82 +130,86 @@ export const useChat = create<ChatState>((set, get) => ({
   loadingMessages: {},
   sending: false,
   connected: false,
+  transport: 'connecting',
   showArchived: false,
 
   init() {
     if (socketBound) return;
     socketBound = true;
-    const socket: Socket = connectSocket();
 
-    socket.on('connect', () => set({ connected: true }));
-    socket.on('disconnect', () => set({ connected: false }));
-    socket.on('connect_error', () => set({ connected: false }));
+    // One set of handlers, fed by whichever transport is live — a WebSocket where the host
+    // can hold one, polling where it cannot.
+    const handlers: RealtimeHandlers = {
+      'message:new': async ({ conversationId, message }: { conversationId: string; message: ApiMessage }) => {
+        const state = get();
+        const existing = state.messages[conversationId] ?? [];
+        // Polling re-reports recent messages; skip anything already shown unchanged.
+        const already = existing.find((m) => m.id === message.id);
+        if (already && already.editedAt === message.editedAt && already.readCount === message.readCount) {
+          return;
+        }
 
-    socket.on('message:new', async ({ conversationId, message }: { conversationId: string; message: ApiMessage }) => {
-      const decrypted = await decrypt(message);
-      const state = get();
-      const isActive = state.activeId === conversationId;
+        const decrypted = await decrypt(message);
+        const isActive = state.activeId === conversationId;
 
-      set((current) => ({
-        messages: {
-          ...current.messages,
-          [conversationId]: mergeMessage(current.messages[conversationId] ?? [], decrypted),
-        },
-      }));
+        set((current) => ({
+          messages: {
+            ...current.messages,
+            [conversationId]: mergeMessage(current.messages[conversationId] ?? [], decrypted),
+          },
+        }));
 
-      // Refresh the sidebar so ordering, previews and unread counts stay truthful.
-      void get().loadConversations({ archived: get().showArchived });
+        void get().loadConversations({ archived: get().showArchived });
 
-      const me = useAuth.getState().user;
-      if (message.senderId && me && message.senderId !== me.id) {
+        const me = useAuth.getState().user;
+        if (already || !message.senderId || !me || message.senderId === me.id) return;
+
         if (isActive && document.visibilityState === 'visible') {
           void get().markConversationRead(conversationId);
-        } else {
-          const conversation = state.conversations.find((c) => c.id === conversationId);
-          const muted = conversation?.mutedUntil && new Date(conversation.mutedUntil) > new Date();
-          if (!muted) {
-            const sender =
-              conversation?.type === 'group'
-                ? (state.members[conversationId]?.find((m) => m.userId === message.senderId)?.displayName ??
-                  'Someone')
-                : (conversation?.otherMember?.displayName ?? 'New message');
-            showDesktopNotification({
-              title: conversation?.type === 'group' ? `${sender} · ${conversation.title}` : sender,
-              body: decrypted.payload?.text?.slice(0, 140) ?? 'Sent you a message.',
-              tag: conversationId,
-            });
-          }
+          return;
         }
-      }
-    });
 
-    socket.on('message:updated', async ({ conversationId, message }: { conversationId: string; message: ApiMessage }) => {
-      const decrypted = await decrypt(message);
-      set((current) => ({
-        messages: {
-          ...current.messages,
-          [conversationId]: mergeMessage(current.messages[conversationId] ?? [], decrypted),
-        },
-      }));
-    });
+        const conversation = state.conversations.find((c) => c.id === conversationId);
+        const muted = conversation?.mutedUntil && new Date(conversation.mutedUntil) > new Date();
+        if (muted) return;
 
-    socket.on('message:deleted', ({ conversationId, messageId }: { conversationId: string; messageId: string }) => {
-      set((current) => ({
-        messages: {
-          ...current.messages,
-          [conversationId]: (current.messages[conversationId] ?? []).map((m) =>
-            m.id === messageId
-              ? { ...m, deletedAt: new Date().toISOString(), payload: null, decryptionFailed: false }
-              : m,
-          ),
-        },
-      }));
-      void get().loadConversations({ archived: get().showArchived });
-    });
+        const sender =
+          conversation?.type === 'group'
+            ? (state.members[conversationId]?.find((m) => m.userId === message.senderId)?.displayName ??
+              'Someone')
+            : (conversation?.otherMember?.displayName ?? 'New message');
+        showDesktopNotification({
+          title: conversation?.type === 'group' ? `${sender} · ${conversation.title}` : sender,
+          body: decrypted.payload?.text?.slice(0, 140) ?? 'Sent you a message.',
+          tag: conversationId,
+        });
+      },
 
-    socket.on(
-      'message:read',
-      ({ conversationId, messageIds }: { conversationId: string; readerId: string; messageIds: string[] }) => {
+      'message:updated': async ({ conversationId, message }: { conversationId: string; message: ApiMessage }) => {
+        const decrypted = await decrypt(message);
+        set((current) => ({
+          messages: {
+            ...current.messages,
+            [conversationId]: mergeMessage(current.messages[conversationId] ?? [], decrypted),
+          },
+        }));
+      },
+
+      'message:deleted': ({ conversationId, messageId }: { conversationId: string; messageId: string }) => {
+        set((current) => ({
+          messages: {
+            ...current.messages,
+            [conversationId]: (current.messages[conversationId] ?? []).map((m) =>
+              m.id === messageId
+                ? { ...m, deletedAt: m.deletedAt ?? new Date().toISOString(), payload: null, decryptionFailed: false }
+                : m,
+            ),
+          },
+        }));
+        void get().loadConversations({ archived: get().showArchived });
+      },
+
+      'message:read': ({ conversationId, messageIds }: { conversationId: string; messageIds: string[] }) => {
         const ids = new Set(messageIds);
         set((current) => ({
           messages: {
@@ -214,11 +220,8 @@ export const useChat = create<ChatState>((set, get) => ({
           },
         }));
       },
-    );
 
-    socket.on(
-      'message:delivered',
-      ({ conversationId, messageIds }: { conversationId: string; messageIds: string[] }) => {
+      'message:delivered': ({ conversationId, messageIds }: { conversationId: string; messageIds: string[] }) => {
         const ids = new Set(messageIds);
         set((current) => ({
           messages: {
@@ -229,11 +232,8 @@ export const useChat = create<ChatState>((set, get) => ({
           },
         }));
       },
-    );
 
-    socket.on(
-      'typing:update',
-      ({
+      'typing:update': ({
         conversationId,
         userId,
         displayName,
@@ -254,45 +254,57 @@ export const useChat = create<ChatState>((set, get) => ({
           return { typing: { ...current.typing, [conversationId]: next } };
         });
       },
-    );
 
-    socket.on('presence:update', ({ userId, presence }: { userId: string; presence: string }) => {
-      set((current) => ({ presence: { ...current.presence, [userId]: presence } }));
-    });
+      'presence:update': ({ userId, presence }: { userId: string; presence: string }) => {
+        set((current) => ({ presence: { ...current.presence, [userId]: presence } }));
+      },
 
-    socket.on('conversation:new', () => {
-      void get().loadConversations({ archived: get().showArchived });
-    });
-    socket.on('conversation:updated', ({ conversationId }: { conversationId: string }) => {
-      void get().loadConversations({ archived: get().showArchived });
-      if (get().activeId === conversationId) void get().reloadMembers(conversationId);
-    });
-    socket.on('conversation:removed', ({ conversationId }: { conversationId: string }) => {
-      set((current) => ({
-        conversations: current.conversations.filter((c) => c.id !== conversationId),
-        activeId: current.activeId === conversationId ? null : current.activeId,
-      }));
-    });
+      'conversation:new': () => {
+        void get().loadConversations({ archived: get().showArchived });
+      },
 
-    socket.on('request:new', () => {
-      void get().loadRequests();
-      void get().loadNotifications();
-    });
-    socket.on('request:accepted', () => {
-      void get().loadConversations({ archived: get().showArchived });
-      void get().loadRequests();
-    });
-    socket.on('request:resolved', () => void get().loadRequests());
+      'conversation:updated': ({ conversationId }: { conversationId: string }) => {
+        void get().loadConversations({ archived: get().showArchived });
+        if (conversationId && get().activeId === conversationId) void get().reloadMembers(conversationId);
+      },
 
-    socket.on('notification:new', (notification: AppNotification) => {
-      set((current) => ({
-        notifications: [notification, ...current.notifications].slice(0, 60),
-        unreadNotifications: current.unreadNotifications + 1,
-      }));
+      'conversation:removed': ({ conversationId }: { conversationId: string }) => {
+        set((current) => ({
+          conversations: current.conversations.filter((c) => c.id !== conversationId),
+          activeId: current.activeId === conversationId ? null : current.activeId,
+        }));
+      },
+
+      'request:new': () => {
+        void get().loadRequests();
+        void get().loadNotifications();
+      },
+
+      'request:accepted': () => {
+        void get().loadConversations({ archived: get().showArchived });
+        void get().loadRequests();
+      },
+
+      'request:resolved': () => void get().loadRequests(),
+
+      'notification:new': (notification: AppNotification) => {
+        set((current) =>
+          current.notifications.some((n) => n.id === notification.id)
+            ? {}
+            : {
+                notifications: [notification, ...current.notifications].slice(0, 60),
+                unreadNotifications: current.unreadNotifications + 1,
+              },
+        );
+      },
+    };
+
+    realtime.start(handlers as RealtimeHandlers, (mode) => {
+      set({ transport: mode, connected: mode === 'socket' || mode === 'polling' });
     });
 
     // Expire stale typing indicators even if the "stopped" event is lost.
-    const sweep = window.setInterval(() => {
+    typingSweep = window.setInterval(() => {
       const now = Date.now();
       set((current) => {
         let changed = false;
@@ -305,13 +317,11 @@ export const useChat = create<ChatState>((set, get) => ({
         return changed ? { typing: next } : {};
       });
     }, 2000);
-    (socket as unknown as { _veyloSweep?: number })._veyloSweep = sweep;
   },
 
   teardown() {
-    const socket = getSocket() as unknown as { _veyloSweep?: number } | null;
-    if (socket?._veyloSweep) window.clearInterval(socket._veyloSweep);
-    disconnectSocket();
+    window.clearInterval(typingSweep);
+    realtime.stop();
     socketBound = false;
     set({
       conversations: [],
@@ -324,6 +334,7 @@ export const useChat = create<ChatState>((set, get) => ({
       notifications: [],
       unreadNotifications: 0,
       connected: false,
+      transport: 'offline',
     });
   },
 
@@ -354,7 +365,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   async openConversation(id) {
     set((current) => ({ activeId: id, loadingMessages: { ...current.loadingMessages, [id]: true } }));
-    getSocket()?.emit('conversation:join', { conversationId: id });
+    realtime.emit('conversation:join', { conversationId: id });
 
     // A conversation opened straight after creation — or reached by a deep link — is not in
     // the sidebar list yet, and the panel renders from that list. Fetch it first.
@@ -385,7 +396,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   closeConversation() {
     const id = get().activeId;
-    if (id) getSocket()?.emit('conversation:leave', { conversationId: id });
+    if (id) realtime.emit('conversation:leave', { conversationId: id });
     set({ activeId: null });
   },
 
@@ -450,7 +461,9 @@ export const useChat = create<ChatState>((set, get) => ({
         attachmentIds: attachments.map((a) => a.id),
         mentions: options?.mentions ?? [],
       });
-      // The socket echo populates the thread, so there is no optimistic duplicate to clean up.
+      // The transport echo populates the thread, so there is no optimistic duplicate to
+      // clean up. In polling mode, pull now instead of waiting for the next tick.
+      realtime.nudge();
     } finally {
       set({ sending: false });
     }
@@ -536,7 +549,9 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   sendTyping(conversationId, typing) {
-    getSocket()?.emit(typing ? 'typing:start' : 'typing:stop', { conversationId });
+    // Typing is a live-connection signal; polling mode has no upstream channel for it.
+    if (!realtime.supportsEphemeral()) return;
+    realtime.emit(typing ? 'typing:start' : 'typing:stop', { conversationId });
   },
 
   async loadRequests() {

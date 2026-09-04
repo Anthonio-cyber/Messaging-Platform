@@ -4,6 +4,7 @@ import { useChat } from '../../store/chat';
 import { useAuth } from '../../store/auth';
 import { formatTimestamp } from '../../lib/format';
 import { Avatar, Button, EmptyState, Icon, Skeleton, Wordmark } from '../../components/ui';
+import { describeTransport } from '../../lib/realtime';
 import type { ConversationSummary } from '../../lib/api';
 
 type Tab = 'all' | 'groups' | 'requests';
@@ -28,8 +29,10 @@ export function Sidebar({
     unreadNotifications,
     showArchived,
     setShowArchived,
-    connected,
+    transport,
   } = useChat();
+
+  const transportNotice = describeTransport(transport);
 
   const [tab, setTab] = useState<Tab>('all');
   const [query, setQuery] = useState('');
@@ -191,7 +194,7 @@ export function Sidebar({
               src={user?.avatarUrl}
               seed={user?.id}
               size="sm"
-              presence={connected ? 'online' : null}
+              presence={transport === 'socket' ? 'online' : null}
             />
             <span className="min-w-0 flex-1 text-left">
               <span className="block truncate text-sm font-medium text-text">{user?.displayName}</span>
@@ -211,9 +214,13 @@ export function Sidebar({
           </button>
         </div>
 
-        {!connected && (
-          <p className="px-3 pb-1 pt-2 text-xs text-warn" role="status">
-            Reconnecting…
+        {transportNotice && (
+          <p
+            className={`px-3 pb-1 pt-2 text-xs ${transport === 'offline' ? 'text-warn' : 'text-faint'}`}
+            role="status"
+            title={transportNotice.detail}
+          >
+            {transportNotice.label}
           </p>
         )}
       </footer>
