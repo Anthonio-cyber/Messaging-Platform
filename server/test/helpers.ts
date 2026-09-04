@@ -110,6 +110,43 @@ export class ApiClient {
   get<T = unknown>(path: string) {
     return this.request<T>('GET', path);
   }
+
+  /** Raw binary upload, the way the browser posts an encrypted attachment. */
+  async upload<T = unknown>(path: string, bytes: Buffer): Promise<{ status: number; body: T }> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' };
+    const cookie = this.cookieHeader();
+    if (cookie) headers.Cookie = cookie;
+    const token = this.csrfToken();
+    if (token) headers['x-veylo-csrf'] = token;
+
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array(bytes),
+      redirect: 'manual',
+    });
+    this.storeCookies(response);
+    const text = await response.text();
+    let parsed: unknown = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = text;
+    }
+    return { status: response.status, body: parsed as T };
+  }
+
+  /** Returns the raw bytes of a download, plus its status. */
+  async downloadBytes(path: string): Promise<{ status: number; bytes: Buffer }> {
+    const headers: Record<string, string> = {};
+    const cookie = this.cookieHeader();
+    if (cookie) headers.Cookie = cookie;
+    const response = await fetch(`${this.baseUrl}${path}`, { headers, redirect: 'manual' });
+    return {
+      status: response.status,
+      bytes: Buffer.from(await response.arrayBuffer().catch(() => new ArrayBuffer(0))),
+    };
+  }
   post<T = unknown>(path: string, body?: unknown) {
     return this.request<T>('POST', path, body);
   }

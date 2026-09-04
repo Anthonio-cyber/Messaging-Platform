@@ -119,3 +119,52 @@ export async function decryptMessage(
   );
   return JSON.parse(s.to_string(plaintext));
 }
+
+const CODE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+
+export interface RecoveryCode {
+  code: string;
+  wrappedVaultKey: string;
+}
+
+/** Mirrors generateRecoveryCodes in web/src/lib/crypto.ts. */
+export async function generateRecoveryCodes(vaultKey: Uint8Array, count = 8): Promise<RecoveryCode[]> {
+  const s = await ready();
+  const codes: RecoveryCode[] = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const raw = s.randombytes_buf(10);
+    const code = Array.from(raw)
+      .map((byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length])
+      .join('');
+    const codeKey = s.crypto_generichash(32, s.from_string(code), s.from_string('veylo-recovery'));
+    const nonce = s.randombytes_buf(s.crypto_secretbox_NONCEBYTES);
+    const sealed = s.crypto_secretbox_easy(vaultKey, nonce, codeKey);
+    const blob = new Uint8Array(nonce.length + sealed.length);
+    blob.set(nonce);
+    blob.set(sealed, nonce.length);
+    codes.push({ code, wrappedVaultKey: s.to_base64(blob, s.base64_variants.ORIGINAL) });
+  }
+  return codes;
+}
+
+export async function unwrapVaultKeyWithCode(wrappedVaultKey: string, code: string): Promise<Uint8Array> {
+  const s = await ready();
+  const normalized = code.trim().replace(/\s+/g, '').toLowerCase();
+  const codeKey = s.crypto_generichash(32, s.from_string(normalized), s.from_string('veylo-recovery'));
+  const blob = s.from_base64(wrappedVaultKey, s.base64_variants.ORIGINAL);
+  const nonce = blob.subarray(0, s.crypto_secretbox_NONCEBYTES);
+  const sealed = blob.subarray(s.crypto_secretbox_NONCEBYTES);
+  return s.crypto_secretbox_open_easy(sealed, nonce, codeKey);
+}
+
+/** Re-seals an existing private key under a new vault key (password change or reset). */
+export async function resealPrivateKey(privateKey: Uint8Array, vaultKey: Uint8Array): Promise<string> {
+  const s = await ready();
+  const nonce = s.randombytes_buf(s.crypto_secretbox_NONCEBYTES);
+  const sealed = s.crypto_secretbox_easy(privateKey, nonce, vaultKey);
+  const blob = new Uint8Array(nonce.length + sealed.length);
+  blob.set(nonce);
+  blob.set(sealed, nonce.length);
+  return s.to_base64(blob, s.base64_variants.ORIGINAL);
+}

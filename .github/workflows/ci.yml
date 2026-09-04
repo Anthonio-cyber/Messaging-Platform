@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Type-check, test, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: veylo
+          POSTGRES_PASSWORD: veylo_ci_password
+          POSTGRES_DB: veylo_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U veylo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://veylo:veylo_ci_password@127.0.0.1:5432/veylo_test
+      # Build-time only. Real deployments generate these with `openssl rand -base64 32`.
+      DATABASE_URL: postgres://veylo:veylo_ci_password@127.0.0.1:5432/veylo_test
+      AUTH_SECRET: ci-only-auth-secret-value-long-enough-000000
+      DATA_ENCRYPTION_KEY: ci-only-data-encryption-key-long-enough-00000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Type-check both workspaces
+        run: npm run typecheck
+
+      - name: Integration tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify migrations apply to an empty database
+        run: |
+          PGPASSWORD=veylo_ci_password psql -h 127.0.0.1 -U veylo -d postgres \
+            -c 'DROP DATABASE IF EXISTS veylo_migrate_check' \
+            -c 'CREATE DATABASE veylo_migrate_check'
+          DATABASE_URL=postgres://veylo:veylo_ci_password@127.0.0.1:5432/veylo_migrate_check \
+            node server/dist/db/migrate.js
+
+  e2e:
+    name: Browser end-to-end
+    runs-on: ubuntu-latest
+    needs: check
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: veylo
+          POSTGRES_PASSWORD: veylo_ci_password
+          POSTGRES_DB: veylo
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U veylo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: development
+      DATABASE_URL: postgres://veylo:veylo_ci_password@127.0.0.1:5432/veylo
+      AUTH_SECRET: ci-only-auth-secret-value-long-enough-000000
+      DATA_ENCRYPTION_KEY: ci-only-data-encryption-key-long-enough-00000
+      APP_URL: http://localhost:5173
+      API_URL: http://localhost:4000
+      COOKIE_SECURE: 'false'
+      # The suite creates several accounts from one address.
+      RATE_LIMIT_TRUSTED_IPS: 127.0.0.1,::1,::ffff:127.0.0.1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run migrate
+
+      - name: Start the stack
+        run: |
+          npm run dev:server & 
+          npm run dev:web &
+          npx wait-on http://127.0.0.1:4000/api/health http://localhost:5173 --timeout 120000
+
+      - run: npm run e2e
+
+      - name: Server log on failure
+        if: failure()
+        run: cat npm-debug.log 2>/dev/null || true

@@ -3,6 +3,7 @@ import { useChat, type DecryptedMessage } from '../../store/chat';
 import { Button, Icon, useToast } from '../../components/ui';
 import { formatBytes } from '../../lib/format';
 import { ApiError } from '../../lib/api';
+import { VoiceRecorder, isVoiceRecordingSupported } from './VoiceRecorder';
 
 const EMOJI_GROUPS: Array<{ label: string; emoji: string[] }> = [
   { label: 'Reactions', emoji: ['👍', '👎', '❤️', '🔥', '🎉', '😂', '😮', '😢', '🙏', '👀'] },
@@ -239,6 +240,14 @@ export function Composer({
             e.target.value = '';
           }}
         />
+
+        {/* A recording becomes an ordinary attachment, so it takes the same encrypted path. */}
+        {isVoiceRecordingSupported() && (
+          <VoiceRecorder
+            disabled={files.length >= MAX_FILES}
+            onRecorded={(file) => setFiles((current) => [...current, file].slice(0, MAX_FILES))}
+          />
+        )}
 
         <textarea
           ref={textareaRef}

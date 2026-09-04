@@ -165,6 +165,7 @@ veylo/
 | `npm run migrate` | Apply pending migrations |
 | `npm run seed` | Development fixtures (refuses to run in production) |
 | `npm test` | Integration tests against PostgreSQL |
+| `npm run e2e` | Browser end-to-end suite (needs `npm run dev` running) |
 | `npm run typecheck` | Type-check both workspaces |
 
 ### Tests
@@ -181,6 +182,13 @@ npm test
 ```
 
 Set `TEST_DATABASE_URL` to point somewhere else.
+
+`npm run e2e` adds the check no server-side test can make: it drives two real browsers and
+asserts that a message encrypted in one is decryptable in the other, arriving in realtime.
+See `e2e/README.md`.
+
+Both suites, plus a type-check, a production build and a migrations-from-empty check, run in
+CI on every push — see `.github/workflows/ci.yml`.
 
 ---
 

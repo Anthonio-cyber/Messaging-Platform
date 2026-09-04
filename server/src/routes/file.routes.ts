@@ -6,7 +6,7 @@ import { asyncRoute, parseQuery } from '../lib/http.js';
 import { badRequest, forbidden, notFound, tooLarge } from '../lib/errors.js';
 import { one, query } from '../db/pool.js';
 import { ALLOWED_CATEGORIES, isBlockedFilename, scanUpload, storage } from '../lib/storage.js';
-import { attachAuth, requireAuth } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { limiters } from '../middleware/rateLimit.js';
 import { requireMembership } from '../services/conversation.service.js';
 import { areContacts, blockState, getPrivacy } from '../services/user.service.js';
@@ -167,9 +167,9 @@ fileRouter.delete(
  * Serves stored objects by key. Avatar visibility follows the owner's privacy setting;
  * attachment keys are refused here and must go through the id route, which checks membership.
  */
+// Deliberately open to signed-out viewers as well: an avatar set to "everyone" is public.
 fileRouter.get(
   '/:key(*)',
-  attachAuth(),
   asyncRoute(async (req, res) => {
     const key = decodeURIComponent(String(req.params.key ?? ''));
     if (!key.startsWith('avatars/')) throw notFound('That file is not available.');

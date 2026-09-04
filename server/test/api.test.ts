@@ -524,3 +524,304 @@ describe('account management', () => {
     assert.equal(row.rows[0]!.status, 'deleted');
   });
 });
+
+describe('attachments', () => {
+  let sender: Account;
+  let recipient: Account;
+  let outsider: Account;
+  let conversationId: string;
+
+  before(async () => {
+    sender = await registerAccount('sharer', 'File Sharer');
+    recipient = await registerAccount('receiver', 'File Receiver');
+    outsider = await registerAccount('nosy', 'Nosy Person');
+
+    // Open the recipient's inbox so the conversation is live without a request dance.
+    await recipient.client.patch('/api/users/me/privacy', { whoCanContact: 'everyone' });
+    const opened = await sender.client.post<{ conversation: { id: string } }>(
+      '/api/conversations/direct',
+      { identifier: 'receiver' },
+    );
+    conversationId = opened.body.conversation.id;
+  });
+
+  test('uploads an encrypted attachment and attaches it to a message', async () => {
+    // The browser encrypts before uploading, so the server only ever sees these bytes.
+    const ciphertextBytes = Buffer.from('OPAQUE-CIPHERTEXT-BYTES-NOT-A-REAL-FILE');
+
+    const uploaded = await sender.client.upload<{ attachment: { id: string; scanStatus: string } }>(
+      `/api/files/attachments/${conversationId}?category=document&filename=notes.txt`,
+      ciphertextBytes,
+    );
+    assert.equal(uploaded.status, 201, `upload failed: ${JSON.stringify(uploaded.body)}`);
+    // Nothing scans client-side ciphertext, and saying "clean" would be a lie.
+    assert.equal(uploaded.body.attachment.scanStatus, 'skipped');
+
+    const members = await sender.client.get<{ members: Array<{ userId: string; publicKey: string }> }>(
+      `/api/conversations/${conversationId}/members`,
+    );
+    const encrypted = await crypto.encryptForMembers(
+      { text: 'notes attached' },
+      members.body.members.map((m) => ({ userId: m.userId, publicKey: m.publicKey })),
+    );
+    const sent = await sender.client.post(`/api/chat/${conversationId}/messages`, {
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+      kind: 'attachment',
+      attachmentIds: [uploaded.body.attachment.id],
+    });
+    assert.equal(sent.status, 201);
+
+    // The recipient can fetch the ciphertext back, byte for byte.
+    const download = await recipient.client.downloadBytes(
+      `/api/files/attachments/${uploaded.body.attachment.id}`,
+    );
+    assert.equal(download.status, 200);
+    assert.deepEqual(download.bytes, ciphertextBytes);
+
+    // Someone outside the conversation cannot, even holding the id.
+    const denied = await outsider.client.downloadBytes(
+      `/api/files/attachments/${uploaded.body.attachment.id}`,
+    );
+    assert.ok(denied.status === 403 || denied.status === 404, `outsider got ${denied.status}`);
+  });
+
+  test('refuses to accept an upload for a conversation you are not in', async () => {
+    const response = await outsider.client.upload(
+      `/api/files/attachments/${conversationId}?category=document`,
+      Buffer.from('not mine'),
+    );
+    assert.equal(response.status, 404);
+  });
+
+  test('rejects an upload with no session', async () => {
+    const anonymous = new ApiClient(server.url);
+    await anonymous.bootstrap();
+    const response = await anonymous.upload(
+      `/api/files/attachments/${conversationId}?category=document`,
+      Buffer.from('anonymous'),
+    );
+    assert.equal(response.status, 401);
+  });
+
+  test('rejects dangerous filenames before anything is stored', async () => {
+    const response = await sender.client.upload(
+      `/api/files/attachments/${conversationId}?category=file&filename=payload.exe`,
+      Buffer.from('MZ'),
+    );
+    assert.equal(response.status, 400);
+  });
+
+  test('validates a profile picture by its bytes, not its declared type', async () => {
+    const notAnImage = await sender.client.upload('/api/files/avatar', Buffer.from('#!/bin/sh\nrm -rf /'));
+    assert.equal(notAnImage.status, 400);
+
+    // A minimal but structurally valid PNG header.
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(64, 0x11),
+    ]);
+    const accepted = await sender.client.upload<{ avatarUrl: string }>('/api/files/avatar', png);
+    assert.equal(accepted.status, 201);
+    assert.match(accepted.body.avatarUrl, /\/api\/files\/avatars/);
+  });
+});
+
+describe('account recovery', () => {
+  const RECOVERY_EMAIL = 'recovery-target@example.com';
+  const NEW_PASSWORD = 'an entirely different passphrase 77';
+
+  let account: Account;
+  let vaultKey: Uint8Array;
+  let conversationId: string;
+  let secretText: string;
+
+  before(async () => {
+    // Register with a recovery address, keeping the vault key so codes can be made from it.
+    const client = new ApiClient(server.url);
+    await client.bootstrap();
+
+    const authSalt = await crypto.randomSalt();
+    const vaultSalt = await crypto.randomSalt();
+    vaultKey = await crypto.deriveKey(PASSWORD, vaultSalt);
+    const identity = await crypto.createIdentity(vaultKey);
+
+    const registered = await client.post<{ user: { id: string } }>('/api/auth/register', {
+      username: 'forgetful',
+      displayName: 'Forgetful Person',
+      authenticator: await crypto.deriveAuthenticator(PASSWORD, authSalt),
+      authSalt,
+      vaultSalt,
+      publicKey: identity.publicKey,
+      encryptedPrivateKey: identity.encryptedPrivateKey,
+      recoveryEmail: RECOVERY_EMAIL,
+    });
+    assert.equal(registered.status, 201);
+
+    account = {
+      client,
+      id: registered.body.user.id,
+      username: 'forgetful',
+      publicKey: identity.publicKey,
+      privateKey: identity.privateKey,
+    };
+
+    // A note to self, so there is history that must survive the reset.
+    const friend = await registerAccount('confidant', 'Confidant');
+    await friend.client.patch('/api/users/me/privacy', { whoCanContact: 'everyone' });
+
+    const opened = await account.client.post<{ conversation: { id: string } }>(
+      '/api/conversations/direct',
+      { identifier: 'confidant' },
+    );
+    conversationId = opened.body.conversation.id;
+
+    const members = await account.client.get<{ members: Array<{ userId: string; publicKey: string }> }>(
+      `/api/conversations/${conversationId}/members`,
+    );
+    secretText = 'This line has to survive a forgotten passphrase.';
+    const encrypted = await crypto.encryptForMembers(
+      { text: secretText },
+      members.body.members.map((m) => ({ userId: m.userId, publicKey: m.publicKey })),
+    );
+    await account.client.post(`/api/chat/${conversationId}/messages`, {
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+    });
+  });
+
+  test('verifies the recovery address before it can be used for a reset', async () => {
+    const { pool } = await import('../src/db/pool.js');
+
+    // Unverified: the forgot flow must find nothing, while still answering identically.
+    const beforeVerification = await account.client.post<{ ok: boolean }>('/api/auth/password/forgot', {
+      email: RECOVERY_EMAIL,
+    });
+    assert.equal(beforeVerification.status, 200);
+    const issued = await pool.query(
+      "SELECT 1 FROM auth_tokens WHERE user_id = $1 AND purpose = 'password_reset'",
+      [account.id],
+    );
+    assert.equal(issued.rowCount, 0, 'an unverified address must not receive a reset token');
+
+    // Confirm the address using the token the registration email carried.
+    const verifyToken = await pool.query<{ token_hash: string }>(
+      "SELECT token_hash FROM auth_tokens WHERE user_id = $1 AND purpose = 'email_verify' AND used_at IS NULL",
+      [account.id],
+    );
+    assert.equal(verifyToken.rowCount, 1);
+
+    // The plaintext token only ever exists in the email, so re-issue one we can read.
+    const { createEmailVerificationToken } = await import('../src/services/auth.service.js');
+    const ticket = await createEmailVerificationToken(account.id, RECOVERY_EMAIL);
+    const verified = await account.client.post('/api/auth/email/verify', { token: ticket.token });
+    assert.equal(verified.status, 200);
+  });
+
+  test('a reset without a recovery code loses history; with one, history survives', async () => {
+    const { createPasswordResetToken } = await import('../src/services/auth.service.js');
+    const { pool } = await import('../src/db/pool.js');
+
+    // Store recovery codes, exactly as the Security settings page does.
+    const codes = await crypto.generateRecoveryCodes(vaultKey, 8);
+    const stored = await account.client.post('/api/auth/recovery/codes', {
+      codes: codes.map((entry) => ({ code: entry.code, wrappedVaultKey: entry.wrappedVaultKey })),
+    });
+    assert.equal(stored.status, 200);
+
+    // Now forget the passphrase and start a reset.
+    const ticket = await createPasswordResetToken(account.id);
+    const resetClient = new ApiClient(server.url);
+    await resetClient.bootstrap();
+
+    const context = await resetClient.post<{
+      username: string;
+      encryptedPrivateKey: string;
+      publicKey: string;
+      recoveryCodesAvailable: boolean;
+    }>('/api/auth/password/reset/context', { token: ticket.token });
+    assert.equal(context.status, 200);
+    assert.equal(context.body.recoveryCodesAvailable, true);
+
+    // Redeem one code to recover the vault key, then re-seal the same identity key.
+    const redeemed = await resetClient.post<{ wrappedVaultKey: string }>('/api/auth/recovery/redeem', {
+      token: ticket.token,
+      code: codes[0]!.code,
+    });
+    assert.equal(redeemed.status, 200);
+
+    const recoveredVaultKey = await crypto.unwrapVaultKeyWithCode(
+      redeemed.body.wrappedVaultKey,
+      codes[0]!.code,
+    );
+    const privateKey = await crypto.unlockIdentity(context.body.encryptedPrivateKey, recoveredVaultKey);
+
+    const newAuthSalt = await crypto.randomSalt();
+    const newVaultSalt = await crypto.randomSalt();
+    const newVaultKey = await crypto.deriveKey(NEW_PASSWORD, newVaultSalt);
+
+    const reset = await resetClient.post('/api/auth/password/reset', {
+      token: ticket.token,
+      authenticator: await crypto.deriveAuthenticator(NEW_PASSWORD, newAuthSalt),
+      authSalt: newAuthSalt,
+      vaultSalt: newVaultSalt,
+      encryptedPrivateKey: await crypto.resealPrivateKey(privateKey, newVaultKey),
+      publicKey: context.body.publicKey,
+    });
+    assert.equal(reset.status, 200);
+
+    // The old passphrase no longer works, and old sessions are gone.
+    const oldSession = await account.client.get('/api/conversations');
+    assert.equal(oldSession.status, 401, 'a reset must revoke existing sessions');
+
+    // Sign in with the new passphrase and read the message written before the reset.
+    const fresh = new ApiClient(server.url);
+    await fresh.bootstrap();
+    const salts = await fresh.post<{ authSalt: string; vaultSalt: string }>('/api/auth/salt', {
+      identifier: 'forgetful',
+    });
+    const login = await fresh.post<{ user: { encryptedPrivateKey: string; publicKey: string } }>(
+      '/api/auth/login',
+      {
+        identifier: 'forgetful',
+        authenticator: await crypto.deriveAuthenticator(NEW_PASSWORD, salts.body.authSalt),
+      },
+    );
+    assert.equal(login.status, 200);
+
+    const unlockedKey = await crypto.deriveKey(NEW_PASSWORD, salts.body.vaultSalt);
+    const unlockedPrivate = await crypto.unlockIdentity(login.body.user.encryptedPrivateKey, unlockedKey);
+
+    const history = await fresh.get<{
+      messages: Array<{ ciphertext: string; nonce: string; wrappedKey: string }>;
+    }>(`/api/chat/${conversationId}/messages`);
+    assert.equal(history.status, 200);
+    assert.equal(history.body.messages.length, 1);
+
+    const recovered = (await crypto.decryptMessage(
+      history.body.messages[0]!.ciphertext,
+      history.body.messages[0]!.nonce,
+      history.body.messages[0]!.wrappedKey,
+      login.body.user.publicKey,
+      unlockedPrivate,
+    )) as { text: string };
+    assert.equal(recovered.text, secretText, 'a recovery code must keep message history readable');
+
+    // A redeemed code is single-use.
+    const secondTicket = await createPasswordResetToken(account.id);
+    const reuse = await resetClient.post('/api/auth/recovery/redeem', {
+      token: secondTicket.token,
+      code: codes[0]!.code,
+    });
+    assert.equal(reuse.status, 400);
+
+    // Seven of the eight codes remain.
+    const remaining = await pool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM recovery_codes WHERE user_id = $1 AND used_at IS NULL',
+      [account.id],
+    );
+    assert.equal(remaining.rows[0]!.count, 7);
+  });
+});

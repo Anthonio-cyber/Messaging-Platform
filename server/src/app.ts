@@ -32,14 +32,6 @@ export function createApp(): Express {
   app.use(compression());
   app.use(cookieParser());
 
-  // File routes read raw bodies; the JSON parser must not consume them first.
-  app.use('/api/files', fileRouter);
-
-  app.use(express.json({ limit: '256kb' }));
-  app.use(express.urlencoded({ extended: false, limit: '64kb' }));
-  app.use(ensureCsrfCookie());
-  app.use(attachAuth());
-
   app.get('/api/health', async (_req, res) => {
     try {
       await pool.query('SELECT 1');
@@ -60,8 +52,21 @@ export function createApp(): Express {
     });
   });
 
+  // Everything below is API surface. Ordering matters here:
+  //   1. rate limit before any work is done
+  //   2. resolve the session, so every route below can rely on req.auth
+  //   3. CSRF check, which needs the cookies but not the body
+  //   4. file routes, which read raw bodies and so must precede the JSON parser
+  //   5. the JSON parser, then the routes that expect parsed bodies
   app.use('/api', limiters.api);
+  app.use('/api', ensureCsrfCookie());
+  app.use('/api', attachAuth());
   app.use('/api', csrfProtection());
+
+  app.use('/api/files', fileRouter);
+
+  app.use(express.json({ limit: '256kb' }));
+  app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
   app.use('/api/auth', authRouter);
   app.use('/api/users', userRouter);
