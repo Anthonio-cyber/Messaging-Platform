@@ -1,6 +1,9 @@
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
 import compression from 'compression';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { env } from './config/env.js';
 import { attachAuth } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
@@ -69,8 +72,45 @@ export function createApp(): Express {
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin', adminRouter);
 
+  serveWebApp(app);
+
   app.use(notFoundHandler);
   app.use(errorHandler);
 
   return app;
+}
+
+/**
+ * Serves the built web app when it is bundled alongside the API (the Docker image does
+ * this). Deployments that host the frontend separately — a CDN, or Vite in development —
+ * simply have no build here, and this is a no-op.
+ */
+function serveWebApp(app: Express): void {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, '../../web/dist'),
+    path.resolve(process.cwd(), 'web/dist'),
+  ];
+  const webRoot = candidates.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+  if (!webRoot) return;
+
+  // Fingerprinted assets are immutable; index.html must never be cached or clients get
+  // stranded on an old bundle after a deploy.
+  app.use(
+    express.static(webRoot, {
+      index: false,
+      maxAge: '1y',
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-store');
+      },
+    }),
+  );
+
+  // Client-side routing: any non-API path falls through to the app shell.
+  app.get(/^(?!\/api\/|\/realtime).*/, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(path.join(webRoot, 'index.html'));
+  });
+
+  console.log(`[veylo] serving the web app from ${webRoot}`);
 }

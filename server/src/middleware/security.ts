@@ -10,16 +10,41 @@ export const CSRF_HEADER = 'x-veylo-csrf';
 
 export function securityHeaders(): RequestHandler {
   return helmet({
-    // The API serves JSON and attachment bytes only; the web app ships its own CSP.
+    /*
+     * One policy covers both deployment shapes: the API alone (where nothing but JSON and
+     * attachment bytes is served) and the single image that also serves the built web app.
+     *
+     * - 'self' for scripts and styles: the bundle is same-origin and fingerprinted.
+     * - 'wasm-unsafe-eval' for scripts: libsodium compiles a WebAssembly module, which CSP
+     *   blocks under a bare 'self'. This directive permits WebAssembly compilation ONLY —
+     *   it does not re-enable eval() or inline script, which 'unsafe-eval' would.
+     * - blob: for images and media so decrypted attachments can be displayed after the
+     *   browser decrypts them into an object URL.
+     * - connect-src includes ws:/wss: for the realtime socket.
+     * - No 'unsafe-inline' for scripts. React applies inline styles through the CSSOM,
+     *   which CSP does not gate, so style-src stays strict too.
+     */
     contentSecurityPolicy: {
+      useDefaults: false,
       directives: {
-        defaultSrc: ["'none'"],
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+        styleSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        mediaSrc: ["'self'", 'blob:'],
+        fontSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        workerSrc: ["'self'", 'blob:'],
+        objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
-        baseUri: ["'none'"],
-        formAction: ["'none'"],
+        frameSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        ...(env.isProduction ? { upgradeInsecureRequests: [] } : {}),
       },
     },
     crossOriginResourcePolicy: { policy: 'same-site' },
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
     referrerPolicy: { policy: 'no-referrer' },
     hsts: env.isProduction ? { maxAge: 31_536_000, includeSubDomains: true, preload: true } : false,
     // Attachment downloads must not be sniffed into executable types.
