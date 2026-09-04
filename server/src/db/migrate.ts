@@ -16,8 +16,27 @@ async function ensureMigrationsTable(): Promise<void> {
   `);
 }
 
+/**
+ * A stable key for the migration advisory lock. Deploy pipelines can start several builds at
+ * once; without this they would race to apply the same migration and one would fail.
+ */
+const MIGRATION_LOCK_KEY = 8_140_723;
+
 export async function runMigrations(): Promise<{ applied: string[] }> {
   await ensureMigrationsTable();
+
+  // Serialise migration runs across every process pointed at this database.
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+    return await applyPending();
+  } finally {
+    await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => {});
+    lockClient.release();
+  }
+}
+
+async function applyPending(): Promise<{ applied: string[] }> {
 
   const files = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
   const { rows } = await pool.query<{ name: string; checksum: string }>(

@@ -21,7 +21,8 @@
     "test": "npm run test --workspace server",
     "lint": "npm run lint --workspace server && npm run lint --workspace web",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "e2e": "node e2e/smoke.mjs"
+    "e2e": "node e2e/smoke.mjs",
+    "migrate:deploy": "npm run migrate:deploy --workspace server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
