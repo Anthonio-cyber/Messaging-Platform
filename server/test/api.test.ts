@@ -6,6 +6,9 @@ let server: TestServer;
 
 // Imported after helpers.ts has set the test environment.
 const crypto = await import('../src/lib/clientCrypto.js');
+const storageModule = await import('../src/lib/storage.js');
+const pool = await import('../src/db/pool.js');
+const config = await import('../src/config/env.js');
 
 const PASSWORD = 'correct horse battery staple 42';
 
@@ -908,5 +911,70 @@ describe('polling transport (/api/sync)', () => {
     await anonymous.bootstrap();
     const sync = await anonymous.get('/api/sync');
     assert.equal(sync.status, 401);
+  });
+});
+
+describe('database-backed object storage', () => {
+  const driver = new storageModule.DatabaseStorage();
+
+  async function drain(key: string): Promise<Buffer> {
+    const stream = await driver.getStream(key);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks);
+  }
+
+  after(async () => {
+    await pool.query("DELETE FROM storage_objects WHERE key LIKE 'test/%'");
+  });
+
+  test('stores bytes and reads them back unchanged', async () => {
+    // Deliberately not valid UTF-8: attachment bodies are ciphertext, and a driver that
+    // round-trips through a text column would corrupt them silently.
+    const body = Buffer.from([0x00, 0xff, 0x10, 0x80, 0x7f, 0xc3, 0x28]);
+    const stored = await driver.put('test/binary.bin', body, 'application/octet-stream');
+
+    assert.equal(stored.size, body.byteLength);
+    assert.deepEqual(await drain('test/binary.bin'), body);
+  });
+
+  test('replaces an object in place rather than duplicating the key', async () => {
+    await driver.put('test/replaced.bin', Buffer.from('first'), 'text/plain');
+    await driver.put('test/replaced.bin', Buffer.from('second version'), 'text/plain');
+
+    assert.equal((await drain('test/replaced.bin')).toString(), 'second version');
+    const rows = await pool.many<{ byte_size: number }>(
+      'SELECT byte_size FROM storage_objects WHERE key = $1',
+      ['test/replaced.bin'],
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.byte_size, 'second version'.length);
+  });
+
+  test('reports a missing key as not found rather than throwing something opaque', async () => {
+    await assert.rejects(() => driver.getStream('test/never-written.bin'), /not available/i);
+  });
+
+  test('removing an object makes it unreadable', async () => {
+    await driver.put('test/temporary.bin', Buffer.from('gone soon'), 'text/plain');
+    await driver.remove('test/temporary.bin');
+    await assert.rejects(() => driver.getStream('test/temporary.bin'), /not available/i);
+  });
+
+  test('removing a key that was never stored is not an error', async () => {
+    await driver.remove('test/never-existed.bin');
+  });
+
+  test('has no signed-URL path, so downloads stay behind the authorising route', async () => {
+    assert.equal(await driver.signedUrl(), null);
+  });
+
+  test('refuses an upload that would exceed the storage ceiling', async () => {
+    const ceiling = config.env.STORAGE_DB_MAX_BYTES;
+    // One byte past the cap: the check must be on the total, not on this one object.
+    await assert.rejects(
+      () => driver.put('test/oversized.bin', Buffer.alloc(ceiling + 1), 'application/octet-stream'),
+      /run out of file storage/i,
+    );
   });
 });

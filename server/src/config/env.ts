@@ -39,7 +39,7 @@ const schema = z.object({
   TRUST_PROXY: bool(false),
 
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
-  STORAGE_DRIVER: z.enum(['s3', 'local']).default('local'),
+  STORAGE_DRIVER: z.enum(['s3', 'local', 'db']).default('local'),
   STORAGE_ENDPOINT: z.string().optional(),
   STORAGE_REGION: z.string().default('auto'),
   STORAGE_BUCKET: z.string().optional(),
@@ -47,6 +47,10 @@ const schema = z.object({
   STORAGE_SECRET_KEY: z.string().optional(),
   STORAGE_FORCE_PATH_STYLE: bool(true),
   STORAGE_LOCAL_DIR: z.string().default('./uploads'),
+  // Ceiling for STORAGE_DRIVER=db. Blobs share the database's size quota with the messages,
+  // so an unbounded upload table can take the whole application down rather than just
+  // uploads. Default leaves room on a 512 MB managed free tier.
+  STORAGE_DB_MAX_BYTES: z.coerce.number().int().positive().default(256 * 1024 * 1024),
 
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('Veylo <no-reply@veylo.chat>'),
@@ -104,6 +108,14 @@ if (env.isProduction) {
   if (env.STORAGE_DRIVER === 'local') {
     // Local disk is not durable on most PaaS hosts; refuse to pretend it is.
     console.warn('[config] STORAGE_DRIVER=local in production: attachments will not survive redeploys.');
+  }
+  if (env.STORAGE_DRIVER === 'db') {
+    // Durable, but it spends the database's quota and connections on file bytes.
+    console.warn(
+      `[config] STORAGE_DRIVER=db: files live in Postgres, capped at ${Math.floor(
+        env.STORAGE_DB_MAX_BYTES / (1024 * 1024),
+      )} MB. Move to s3 before that matters.`,
+    );
   }
 }
 

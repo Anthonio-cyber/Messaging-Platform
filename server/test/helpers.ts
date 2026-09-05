@@ -9,6 +9,9 @@ process.env.DATA_ENCRYPTION_KEY = 'test-data-encryption-key-long-enough-00000000
 process.env.COOKIE_SECURE = 'false';
 process.env.STORAGE_DRIVER = 'local';
 process.env.STORAGE_LOCAL_DIR = './.test-uploads';
+// Small enough that the database driver's ceiling can be tested without allocating
+// a quarter of a gigabyte to prove it.
+process.env.STORAGE_DB_MAX_BYTES = String(1024 * 1024);
 process.env.IDENTITY_DOMAIN = 'veylo.test';
 // The suite creates dozens of accounts from one address; exempt the loopback the same way a
 // deployment exempts its uptime probes.

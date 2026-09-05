@@ -1,11 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createReadStream } from 'node:fs';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../config/env.js';
-import { serverError } from './errors.js';
+import { notFound, serverError, tooLarge } from './errors.js';
+import { one, query } from '../db/pool.js';
 
 export interface StoredObject {
   key: string;
@@ -13,7 +14,7 @@ export interface StoredObject {
 }
 
 export interface StorageDriver {
-  readonly kind: 's3' | 'local';
+  readonly kind: 's3' | 'local' | 'db';
   put(key: string, body: Buffer, contentType: string): Promise<StoredObject>;
   getStream(key: string): Promise<Readable>;
   /** Short-lived direct URL, or null when downloads must be proxied through the API. */
@@ -115,8 +116,71 @@ class S3Storage implements StorageDriver {
   }
 }
 
+/**
+ * Keeps objects in Postgres.
+ *
+ * This exists because the alternative on a host with no persistent disk is losing every
+ * avatar and attachment on each restart. It is a deliberate trade: the database is not a
+ * blob store, and this driver inherits its size quota and its connection limit. What it buys
+ * is durability with no second account to sign up for.
+ *
+ * Move to `s3` before the bucket would matter — see docs/DEPLOYMENT.md, which also covers
+ * migrating the objects across.
+ */
+export class DatabaseStorage implements StorageDriver {
+  readonly kind = 'db' as const;
+
+  async put(key: string, body: Buffer, contentType: string): Promise<StoredObject> {
+    // Refuse rather than let uploads consume the quota the messages themselves need. Counting
+    // the replaced object out first means overwriting a key in place is never blocked by its
+    // own size.
+    const used = await one<{ total: string }>(
+      'SELECT COALESCE(SUM(byte_size), 0)::text AS total FROM storage_objects WHERE key <> $1',
+      [key],
+    );
+    if (Number(used?.total ?? 0) + body.byteLength > env.STORAGE_DB_MAX_BYTES) {
+      throw tooLarge(
+        'This deployment has run out of file storage. Ask the administrator to connect an object storage bucket.',
+      );
+    }
+
+    await query(
+      `INSERT INTO storage_objects (key, content_type, byte_size, body)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (key) DO UPDATE
+         SET content_type = EXCLUDED.content_type,
+             byte_size    = EXCLUDED.byte_size,
+             body         = EXCLUDED.body`,
+      [key, contentType, body.byteLength, body],
+    );
+    return { key, size: body.byteLength };
+  }
+
+  async getStream(key: string): Promise<Readable> {
+    const row = await one<{ body: Buffer }>('SELECT body FROM storage_objects WHERE key = $1', [key]);
+    if (!row) throw notFound('That file is not available.');
+    // The whole object is already in memory by the time the query resolves; wrapping it in a
+    // stream is only to match the interface the routes pipe from.
+    return Readable.from([row.body]);
+  }
+
+  async signedUrl(): Promise<string | null> {
+    // Nothing outside this process can read the table, so downloads go through the API route
+    // that authorises them — which is where the access checks live anyway.
+    return null;
+  }
+
+  async remove(key: string): Promise<void> {
+    await query('DELETE FROM storage_objects WHERE key = $1', [key]);
+  }
+}
+
 export const storage: StorageDriver =
-  env.STORAGE_DRIVER === 's3' ? new S3Storage() : new LocalStorage(env.STORAGE_LOCAL_DIR);
+  env.STORAGE_DRIVER === 's3'
+    ? new S3Storage()
+    : env.STORAGE_DRIVER === 'db'
+      ? new DatabaseStorage()
+      : new LocalStorage(env.STORAGE_LOCAL_DIR);
 
 // Attachments are encrypted client-side, so the server sees opaque bytes. The allowlist
 // applies to the declared category, and the byte cap is enforced on the raw upload.

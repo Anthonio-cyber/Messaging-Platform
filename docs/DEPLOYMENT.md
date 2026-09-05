@@ -1,8 +1,7 @@
 # Deploying Veylo
 
 Veylo is a Node.js API with an attached Socket.IO server and a static React bundle, backed by
-PostgreSQL and S3-compatible object storage. It deploys as one container or as a split
-frontend and backend.
+PostgreSQL. It deploys as one container or as a split frontend and backend.
 
 ---
 
@@ -11,7 +10,8 @@ frontend and backend.
 You need:
 
 - **PostgreSQL 14 or newer** — Neon, Supabase, RDS, Render, Railway, or your own
-- **S3-compatible object storage** — AWS S3, Cloudflare R2, Backblaze B2, or MinIO
+- **Somewhere to put files** — an S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze
+  B2, MinIO), or nothing at all if you start on `STORAGE_DRIVER=db`; see **Object storage**
 - **A domain with TLS** — Veylo refuses to boot in production unless `COOKIE_SECURE=true`
 - **An SMTP provider** — for password resets, address confirmation and security alerts
 
@@ -160,6 +160,56 @@ UPDATE users SET role = 'admin' WHERE username = 'you';
 ---
 
 ## Object storage
+
+`STORAGE_DRIVER` picks where avatars and attachments live. There are three options and the
+right one depends on how much you are willing to set up:
+
+| Driver | Durable? | Needs | Use it when |
+| --- | --- | --- | --- |
+| `local` | No on most PaaS hosts | Nothing | Development, or a host with a real persistent disk |
+| `db` | Yes | Nothing beyond the database you already have | A small deployment, or anything before you have a bucket |
+| `s3` | Yes | A bucket and a key pair | Real traffic |
+
+`local` is the default because it is right for development. It is wrong nearly everywhere
+else: Render, Fly, Heroku and most container hosts give a fresh filesystem on every deploy
+and every restart, so every profile picture and every attachment silently disappears. The
+server warns about this at boot in production rather than letting you find out later.
+
+### The `db` driver
+
+Files go into a `storage_objects` table as `bytea`. Nothing else to configure, and the bytes
+survive restarts because the database does. The costs are real but bounded:
+
+- Blobs share the database's size quota with the messages. Filling it takes the whole
+  application down, not just uploads — so `STORAGE_DB_MAX_BYTES` (default 256 MB) caps the
+  table and refuses further uploads with a clear message once it is reached.
+- Every read and write crosses the database connection, so a large file holds a connection
+  for as long as it takes to send.
+- There is no signed URL, so downloads cannot be handed off to a CDN.
+
+That is a fine trade for a handful of users and a poor one past that. Move to `s3` before
+the ceiling is close, not after.
+
+### Moving from `db` to `s3`
+
+Storage keys are identical under both drivers, so this is a copy plus a config change — no
+rows in `attachments` or `users` need rewriting.
+
+```bash
+STORAGE_BUCKET=veylo-files \
+STORAGE_ACCESS_KEY=… STORAGE_SECRET_KEY=… \
+STORAGE_ENDPOINT=https://<account>.r2.cloudflarestorage.com \
+node server/scripts/migrate-storage.mjs
+```
+
+Run it with the app still serving on `db`: every object stays readable from the table until
+you flip the driver, so there is no window where a file resolves to neither place. The script
+is safe to re-run — it skips what is already in the bucket, so an interrupted run resumes.
+
+Then set `STORAGE_DRIVER=s3`, redeploy, and confirm a download works. Only after that,
+`DROP TABLE storage_objects` to reclaim the space.
+
+### The `s3` driver
 
 Create a **private** bucket. Veylo signs short-lived URLs (five minutes) or proxies downloads
 through the authorising API route; either way, public bucket access is never required and
