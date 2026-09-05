@@ -196,6 +196,38 @@ production.
 
 ---
 
+## Continuous deployment
+
+Render deploys automatically on push, but only for repositories connected through Render's
+GitHub App. A repository added to Render by pasting its URL is cloned anonymously: Render
+never installs a webhook on it, so no push ever reaches Render and every deploy has to be
+triggered by hand. The service's "Auto-Deploy: Yes" setting is not the missing piece — it is
+already on, and it has nothing to listen to.
+
+There are two ways to fix it, and only one of them can be done from a terminal.
+
+**Connect the repository properly** (Render dashboard → the service → Settings →
+Repository → *Connect GitHub*, then grant the Render GitHub App access to this repository).
+This is an OAuth flow, so it needs a human at a browser. Afterwards Render deploys on every
+push with nothing else configured.
+
+**Or drive it from GitHub Actions.** `.github/workflows/deploy.yml` calls the service's
+deploy hook once CI passes on the deployment branch. It needs one repository secret:
+
+| Secret | Where to find it |
+| --- | --- |
+| `RENDER_DEPLOY_HOOK_URL` | Render dashboard → the service → Settings → Deploy Hook |
+
+The hook URL contains a key, which is why it is a secret and not a line in the workflow. With
+the secret absent the job skips with a warning rather than failing the build.
+
+The second option deploys only green commits, which the first does not — Render builds
+whatever was pushed. That is a reason to keep the workflow even after connecting the
+repository; if you do both, disable Auto-Deploy on the service so a push does not start two
+builds.
+
+---
+
 ## Reverse proxy
 
 WebSockets need upgrade headers passed through, and `TRUST_PROXY=true` so client IPs are read

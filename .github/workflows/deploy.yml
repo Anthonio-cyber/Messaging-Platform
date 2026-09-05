@@ -1,0 +1,58 @@
+name: Deploy
+
+# Render can only receive push webhooks from repositories connected through its
+# GitHub App. This repository is connected to Render by URL, which gives Render no
+# webhook to listen to — so pushes here would never deploy on their own.
+#
+# This workflow closes that gap from the GitHub side: when CI passes on the
+# deployment branch, it calls the service's deploy hook. The result is the same
+# auto-deploy behaviour, with the bonus that a red build never reaches production.
+#
+# One-time setup (the hook URL contains a key, so it cannot live in this file):
+#   1. Render dashboard → the "veylo" service → Settings → Deploy Hook → copy the URL.
+#   2. GitHub → this repository → Settings → Secrets and variables → Actions →
+#      New repository secret → name it RENDER_DEPLOY_HOOK_URL and paste the URL.
+#
+# Until that secret exists the job skips with an explanation rather than failing.
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+concurrency:
+  group: deploy-render
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Trigger Render deploy
+    runs-on: ubuntu-latest
+    # Only the branch Render is configured to serve, and only when CI went green.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'claude/private-messaging-platform-zwybqc'
+
+    steps:
+      - name: Call the Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK_URL is not set, so nothing was deployed."
+            echo "Add it under Settings → Secrets and variables → Actions to enable auto-deploy."
+            exit 0
+          fi
+
+          echo "Deploying $COMMIT"
+          # The hook takes the commit to build, so the deploy matches the commit CI checked
+          # rather than whatever happens to be at the branch head by the time this runs.
+          status=$(curl --silent --show-error --output /dev/stderr --write-out '%{http_code}' \
+            --max-time 30 "$HOOK&ref=$COMMIT")
+
+          if [ "$status" != "200" ] && [ "$status" != "201" ]; then
+            echo "::error::Render returned HTTP $status."
+            exit 1
+          fi
+          echo "Render accepted the deploy."
