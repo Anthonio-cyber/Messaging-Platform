@@ -139,7 +139,7 @@ export function Composer({
 
   if (disabled) {
     return (
-      <div className="border-t border-line bg-surface px-4 py-4">
+      <div className="safe-bottom border-t border-line bg-surface px-4 py-4">
         <p className="rounded-xl border border-line bg-raised px-4 py-3 text-center text-sm text-muted">
           {disabledReason ?? 'You cannot send messages in this conversation.'}
         </p>
@@ -148,7 +148,7 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-line bg-surface">
+    <div className="safe-bottom border-t border-line bg-surface">
       {(replyTo || editing) && (
         <div className="flex items-center gap-2 border-b border-line px-4 py-2">
           <Icon name={editing ? 'edit' : 'reply'} className="h-3.5 w-3.5 shrink-0 text-accent" />

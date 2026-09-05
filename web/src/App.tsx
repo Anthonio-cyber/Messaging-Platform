@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './store/auth';
+import { installViewportSync } from './lib/viewport';
 import { ToastProvider, Spinner, Logo } from './components/ui';
 import { LandingPage } from './pages/Landing';
 import { SignUpPage } from './pages/SignUp';
@@ -34,6 +35,10 @@ export default function App() {
     document.documentElement.classList.toggle('light', theme === 'light');
     document.documentElement.classList.toggle('dark', theme !== 'light');
   }, []);
+
+  // Publishes the visual viewport height so the messenger can size itself above a phone's
+  // on-screen keyboard. Installed app-wide because orientation changes affect every screen.
+  useEffect(() => installViewportSync(), []);
 
   if (status === 'loading') return <BootScreen />;
 

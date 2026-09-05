@@ -56,6 +56,19 @@ export function MessageList({
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: 'end' }));
   }, [conversation.id]);
 
+  // The on-screen keyboard shrinks the visible area from underneath the thread. Re-pin to
+  // the newest message so what you were reading is not left behind the keyboard.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const onViewportChange = () => {
+      if (atBottom) requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: 'end' }));
+    };
+    viewport.addEventListener('resize', onViewportChange);
+    return () => viewport.removeEventListener('resize', onViewportChange);
+  }, [atBottom]);
+
   function onScroll() {
     const element = scrollRef.current;
     if (!element) return;

@@ -7,6 +7,7 @@ import { Sidebar } from './Sidebar';
 import { ConversationPanel } from './ConversationPanel';
 import { NewGroupDialog, NewMessageDialog } from './Dialogs';
 import { VaultUnlockError } from '../../lib/crypto';
+import { lockAppShell } from '../../lib/viewport';
 
 export function Messenger() {
   const navigate = useNavigate();
@@ -29,6 +30,9 @@ export function Messenger() {
     return () => teardown();
   }, [init, teardown, loadConversations, loadRequests, loadNotifications]);
 
+  // Only the messenger locks the document; every other screen scrolls normally.
+  useEffect(() => lockAppShell(), []);
+
   useEffect(() => {
     if (conversationId) void openConversation(conversationId);
     else closeConversation();
@@ -40,7 +44,7 @@ export function Messenger() {
   const isSubRoute = location.pathname.startsWith('/app/settings') || location.pathname.startsWith('/app/notifications') || location.pathname.startsWith('/app/admin');
 
   return (
-    <div className="flex h-full overflow-hidden bg-ink">
+    <div className="app-shell flex overflow-hidden bg-ink">
       {/* One pane at a time on phones; side by side from md up. */}
       <div className={`${conversationId || isSubRoute ? 'hidden md:flex' : 'flex'} h-full w-full md:w-auto`}>
         <Sidebar
@@ -122,7 +126,7 @@ function UnlockScreen() {
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-ink px-5">
+    <div className="app-shell flex items-center justify-center bg-ink px-5">
       <div className="pane w-full max-w-sm p-6">
         <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-soft text-accent">
           <Icon name="lock" className="h-5 w-5" />

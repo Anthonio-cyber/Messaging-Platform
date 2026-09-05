@@ -170,7 +170,7 @@ export function Sidebar({
         )}
       </div>
 
-      <footer className="border-t border-line p-2">
+      <footer className="safe-bottom border-t border-line p-2">
         <button
           type="button"
           onClick={() => setShowArchived(!showArchived)}
