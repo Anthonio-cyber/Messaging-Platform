@@ -4,6 +4,7 @@ import { createApp } from './app.js';
 import { createRealtimeServer, shutdownRealtime } from './realtime/socket.js';
 import { closePool, pool, query } from './db/pool.js';
 import { purgeExpiredSessions } from './services/session.service.js';
+import { expireStaleCalls } from './services/call.service.js';
 
 async function main(): Promise<void> {
   // Refuse to serve traffic against a database we cannot reach.
@@ -29,6 +30,13 @@ async function main(): Promise<void> {
   );
   cleanup.unref();
 
+  // A device that loses power mid-ring never sends a hangup, so the row would sit at
+  // "ringing" forever and block the pair from calling again.
+  const callSweep = setInterval(() => {
+    expireStaleCalls().catch((error) => console.error('[cleanup] call sweep failed', error));
+  }, 60_000);
+  callSweep.unref();
+
   httpServer.listen(env.PORT, env.HOST, () => {
     console.log(`[veylo] ${env.BRAND_NAME} API listening on http://${env.HOST}:${env.PORT}`);
     console.log(`[veylo] identities are minted at @${env.IDENTITY_DOMAIN}`);
@@ -42,6 +50,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[veylo] ${signal} received, shutting down`);
     clearInterval(cleanup);
+    clearInterval(callSweep);
 
     const force = setTimeout(() => {
       console.error('[veylo] forced exit after 10s');

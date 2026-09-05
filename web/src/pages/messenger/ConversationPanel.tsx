@@ -8,6 +8,9 @@ import { Composer } from './Composer';
 import { InfoPanel } from './InfoPanel';
 import { ForwardDialog, ReportDialog } from './Dialogs';
 import { ApiError } from '../../lib/api';
+import { useCall } from '../../store/call';
+import { isCallingSupported } from '../../lib/webrtc';
+
 
 export function ConversationPanel({
   conversationId,
@@ -39,6 +42,17 @@ export function ConversationPanel({
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
+  const startCall = useCall((s) => s.startCall);
+  const callPhase = useCall((s) => s.phase);
+  // Read the transport from the store rather than asking the client directly: the socket
+  // connects a moment after mount, and a plain function call is not reactive, so the buttons
+  // would only appear if some unrelated state change happened to re-render this component.
+  const transport = useChat((s) => s.transport);
+  // Signalling needs the WebSocket; on a polling deployment the buttons stay hidden rather
+  // than offering a call that cannot connect.
+  const callingAvailable = isCallingSupported() && transport === 'socket';
+  const callBusy = callPhase !== 'idle';
+
   useEffect(() => {
     setReplyTo(null);
     setEditing(null);
@@ -59,6 +73,17 @@ export function ConversationPanel({
       .slice(-40)
       .reverse();
   }, [search, messages, conversationId]);
+
+  function startCallWith(kind: 'audio' | 'video') {
+    const other = conversation?.otherMember;
+    if (!other) return;
+    void startCall(conversationId, kind, {
+      id: other.id,
+      displayName: other.displayName,
+      customAddress: other.customAddress,
+      avatarUrl: other.avatarUrl,
+    });
+  }
 
   if (!conversation) {
     return (
@@ -135,6 +160,31 @@ export function ConversationPanel({
           </button>
 
           <div className="flex items-center gap-0.5">
+            {/* Calls are one-to-one: peer-to-peer WebRTC does not scale past two people. */}
+            {conversation.type === 'direct' && conversation.otherMember && callingAvailable && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => startCallWith('audio')}
+                  aria-label={`Call ${title}`}
+                  title={`Call ${title}`}
+                  disabled={callBusy}
+                  className="rounded-lg p-2 text-muted transition hover:bg-raised hover:text-text disabled:opacity-40"
+                >
+                  <Icon name="phone" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => startCallWith('video')}
+                  aria-label={`Video call ${title}`}
+                  title={`Video call ${title}`}
+                  disabled={callBusy}
+                  className="rounded-lg p-2 text-muted transition hover:bg-raised hover:text-text disabled:opacity-40"
+                >
+                  <Icon name="video" />
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={() => setSearchOpen((v) => !v)}

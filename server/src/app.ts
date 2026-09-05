@@ -19,6 +19,7 @@ import { notificationRouter } from './routes/notification.routes.js';
 import { fileRouter } from './routes/file.routes.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { syncRouter } from './routes/sync.routes.js';
+import { callRouter } from './routes/call.routes.js';
 import { pool } from './db/pool.js';
 
 export function createApp(): Express {
@@ -78,6 +79,7 @@ export function createApp(): Express {
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/sync', syncRouter);
+  app.use('/api/calls', callRouter);
 
   serveWebApp(app);
 

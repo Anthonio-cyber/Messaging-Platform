@@ -51,6 +51,8 @@ const SOCKET_GRACE_MS = 6000;
 class RealtimeClient {
   private socket: Socket | null = null;
   private handlers: RealtimeHandlers = {};
+  /** Socket-only subscriptions registered via on(), kept so reconnects re-attach them. */
+  private extraHandlers = new Map<string, (payload: never) => void>();
   private mode: TransportMode = 'connecting';
   private onModeChange: ((mode: TransportMode) => void) | null = null;
 
@@ -84,6 +86,8 @@ class RealtimeClient {
     this.socket?.removeAllListeners();
     this.socket?.disconnect();
     this.socket = null;
+    // extraHandlers survive deliberately: a stop/start cycle (a remount, or StrictMode's
+    // double mount) builds a new socket, and connectSocket re-attaches them to it.
     this.cursor = null;
     this.revision = null;
     this.setMode('offline');
@@ -101,6 +105,40 @@ class RealtimeClient {
   emit(event: string, payload: unknown): void {
     if (this.mode === 'socket') this.socket?.emit(event, payload);
     // Polling mode has no upstream channel; typing and presence are simply unavailable.
+  }
+
+  /**
+   * Subscribes to an event outside the main handler map — used by call signalling, which is
+   * socket-only and has its own lifecycle. Registered handlers are re-attached whenever the
+   * socket reconnects.
+   */
+  on(event: string, handler: (payload: never) => void): void {
+    this.extraHandlers.set(event, handler);
+    this.socket?.off(event);
+    this.socket?.on(event, handler as (payload: unknown) => void);
+  }
+
+  /** Emits and waits for the server's acknowledgement. Socket transport only. */
+  request<T>(event: string, payload: unknown, timeoutMs = 10_000): Promise<T | null> {
+    const socket = this.socket;
+    if (this.mode !== 'socket' || !socket) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = window.setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      }, timeoutMs);
+
+      socket.emit(event, payload, (response: T) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(response);
+      });
+    });
   }
 
   /** Pulls immediately instead of waiting for the next tick — used right after sending. */
@@ -141,6 +179,9 @@ class RealtimeClient {
     });
 
     for (const [event, handler] of Object.entries(this.handlers)) {
+      socket.on(event, handler as (payload: unknown) => void);
+    }
+    for (const [event, handler] of this.extraHandlers) {
       socket.on(event, handler as (payload: unknown) => void);
     }
   }

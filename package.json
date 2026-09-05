@@ -23,6 +23,7 @@
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "e2e": "node e2e/smoke.mjs",
     "e2e:mobile": "node e2e/mobile-keyboard.mjs",
+    "e2e:calls": "node e2e/calls.mjs",
     "migrate:deploy": "npm run migrate:deploy --workspace server"
   },
   "devDependencies": {

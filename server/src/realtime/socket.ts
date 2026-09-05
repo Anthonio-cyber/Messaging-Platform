@@ -8,6 +8,7 @@ import { requireMembership } from '../services/conversation.service.js';
 import { markDelivered, markRead } from '../services/message.service.js';
 import { getPrivacy, setPresence } from '../services/user.service.js';
 import { attachRealtime, conversationRoom, emitToUser, userRoom } from './emitter.js';
+import { registerCallHandlers } from './calls.js';
 import type { AuthContext } from '../types.js';
 
 interface SocketData {
@@ -189,6 +190,8 @@ async function onConnection(io: SocketServer, socket: Socket): Promise<void> {
       }
     },
   );
+
+  registerCallHandlers(io, socket, userId, auth.user.displayName);
 
   socket.on('presence:set', async (payload: { presence?: 'online' | 'away' | 'offline' }) => {
     const presence = payload?.presence;

@@ -8,6 +8,8 @@ import { ConversationPanel } from './ConversationPanel';
 import { NewGroupDialog, NewMessageDialog } from './Dialogs';
 import { VaultUnlockError } from '../../lib/crypto';
 import { lockAppShell } from '../../lib/viewport';
+import { useCall } from '../../store/call';
+import { CallOverlay } from './CallOverlay';
 
 export function Messenger() {
   const navigate = useNavigate();
@@ -32,6 +34,11 @@ export function Messenger() {
 
   // Only the messenger locks the document; every other screen scrolls normally.
   useEffect(() => lockAppShell(), []);
+
+  // Call signalling binds once for the whole session, so an incoming call reaches the user
+  // wherever they are in the app.
+  const initCalls = useCall((s) => s.init);
+  useEffect(() => initCalls(), [initCalls]);
 
   useEffect(() => {
     if (conversationId) void openConversation(conversationId);
@@ -94,6 +101,8 @@ export function Messenger() {
         onClose={() => setNewGroupOpen(false)}
         onCreated={(id) => navigate(`/app/c/${id}`)}
       />
+
+      <CallOverlay />
     </div>
   );
 }

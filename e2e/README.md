@@ -10,6 +10,7 @@ There are two suites:
 | --- | --- | --- |
 | `smoke.mjs` | `npm run e2e` | The messaging flow end to end, on a desktop viewport |
 | `mobile-keyboard.mjs` | `npm run e2e:mobile` | Layout against a phone's on-screen keyboard |
+| `calls.mjs` | `npm run e2e:calls` | A real WebRTC voice and video call between two browsers |
 
 ## Running
 
@@ -17,6 +18,7 @@ There are two suites:
 npm run dev            # terminal one
 npm run e2e            # terminal two
 npm run e2e:mobile
+npm run e2e:calls
 ```
 
 Against a deployed environment:
@@ -58,6 +60,17 @@ Headless Chromium has no soft keyboard, so the suite simulates the exact iOS sha
 viewport stays at full height while `visualViewport.height` shrinks. It then asserts the shell
 tracked the visual viewport, stopped where the keyboard starts, and dropped its safe-area
 inset so no dead strip is left above the keys.
+
+## The calls suite
+
+Chromium can synthesise a camera and microphone, so `calls.mjs` drives a genuine WebRTC
+negotiation between two browsers — offer, answer, ICE — and asserts that media actually
+arrives, not merely that the UI changed state. It also covers mute, hangup, decline and the
+call log.
+
+The one thing it cannot cover: both browsers run on the same machine, so ICE finds a host
+candidate and never needs a relay. Whether a real deployment can traverse a restrictive NAT
+depends on TURN being configured, which no local test can prove.
 
 ## Notes
 

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useChat, type DecryptedMessage } from '../../store/chat';
 import { useAuth } from '../../store/auth';
 import { formatDayDivider, formatTime, formatBytes } from '../../lib/format';
@@ -9,6 +9,9 @@ import { api } from '../../lib/api';
 import { decryptFile } from '../../lib/crypto';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '😮', '🙏'];
+
+/** Images up to this size decrypt and render inline; larger ones wait for a tap. */
+const AUTO_IMAGE_BYTES = 8 * 1024 * 1024;
 
 export interface MessageAction {
   onReply: (message: DecryptedMessage) => void;
@@ -549,9 +552,47 @@ function AttachmentTile({
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
 
+  const isImage = meta?.mimeType.startsWith('image/') ?? false;
+  // Big images stay behind a tap so a thread does not pull megabytes on open.
+  const autoLoad = isImage && size <= AUTO_IMAGE_BYTES;
+
   useEffect(() => () => {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
   }, [objectUrl]);
+
+  /** Fetches the ciphertext and decrypts it on this device into a displayable blob. */
+  const fetchDecrypted = useCallback(async (): Promise<string | null> => {
+    if (!meta) return null;
+    const ciphertext = await api.download(`/api/files/attachments/${attachmentId}`);
+    const plaintext = await decryptFile(ciphertext, meta.key, meta.nonce);
+    return URL.createObjectURL(new Blob([plaintext as unknown as BlobPart], { type: meta.mimeType }));
+  }, [attachmentId, meta]);
+
+  // Photos should look like photos, not like a file to download. Decrypt and show them
+  // as soon as the message is on screen.
+  useEffect(() => {
+    if (!autoLoad || objectUrl || state === 'loading' || state === 'error') return;
+    let cancelled = false;
+
+    setState('loading');
+    fetchDecrypted()
+      .then((url) => {
+        if (!url) return;
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setObjectUrl(url);
+        setState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setState('error');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autoLoad, objectUrl, state, fetchDecrypted]);
 
   async function open() {
     if (!meta) return;
@@ -561,11 +602,8 @@ function AttachmentTile({
     }
     setState('loading');
     try {
-      const ciphertext = await api.download(`/api/files/attachments/${attachmentId}`);
-      const plaintext = await decryptFile(ciphertext, meta.key, meta.nonce);
-      const url = URL.createObjectURL(
-        new Blob([plaintext as unknown as BlobPart], { type: meta.mimeType }),
-      );
+      const url = await fetchDecrypted();
+      if (!url) return;
       setObjectUrl(url);
       setState('ready');
       window.open(url, '_blank', 'noopener');
@@ -574,15 +612,30 @@ function AttachmentTile({
     }
   }
 
-  const isImage = meta?.mimeType.startsWith('image/');
-
   if (isImage && objectUrl) {
     return (
-      <img
-        src={objectUrl}
-        alt={meta?.name ?? 'Attachment'}
-        className="max-h-72 w-auto rounded-lg border border-line"
-      />
+      <button
+        type="button"
+        onClick={() => window.open(objectUrl, '_blank', 'noopener')}
+        className="block overflow-hidden rounded-lg border border-line"
+        aria-label={`Open ${meta?.name ?? 'image'} full size`}
+      >
+        <img
+          src={objectUrl}
+          alt={meta?.name ?? 'Attachment'}
+          className="max-h-72 w-auto object-cover"
+          loading="lazy"
+        />
+      </button>
+    );
+  }
+
+  // A placeholder the size of a photo, so the thread does not jump when it decrypts.
+  if (autoLoad && state === 'loading') {
+    return (
+      <div className="flex h-40 w-56 items-center justify-center rounded-lg border border-line bg-raised">
+        <Spinner className="h-5 w-5 text-faint" />
+      </div>
     );
   }
 

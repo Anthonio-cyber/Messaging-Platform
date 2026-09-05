@@ -53,6 +53,18 @@ const schema = z.object({
 
   RATE_LIMIT_TRUSTED_IPS: z.string().default(''),
   ADMIN_BOOTSTRAP_ADDRESS: z.string().optional(),
+
+  // --- Calls -----------------------------------------------------------------
+  // WebRTC media is peer-to-peer and never touches this server. STUN lets two devices
+  // discover their public addresses; that is enough for most home networks.
+  STUN_URLS: z.string().default('stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302'),
+  // TURN relays media when a restrictive NAT blocks a direct path — roughly one connection
+  // in six. Without it those calls simply fail to connect, so a real deployment needs one.
+  // The relay only ever forwards DTLS-SRTP packets it cannot decrypt.
+  TURN_URLS: z.string().default(''),
+  TURN_USERNAME: z.string().optional(),
+  TURN_CREDENTIAL: z.string().optional(),
+  CALLS_ENABLED: bool(true),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -75,6 +87,12 @@ export const env = {
     .concat(raw.APP_URL)
     .filter((v, i, arr) => arr.indexOf(v) === i),
   trustedIps: raw.RATE_LIMIT_TRUSTED_IPS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  stunUrls: raw.STUN_URLS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  turnUrls: raw.TURN_URLS.split(',')
     .map((s) => s.trim())
     .filter(Boolean),
 };
