@@ -122,6 +122,21 @@ if (env.isProduction) {
       )} MB. Move to s3 before that matters.`,
     );
   }
+
+  // Whether a relay is configured decides whether calls work on restrictive networks, and it
+  // is set entirely through the environment — so say at boot which way it landed. Otherwise a
+  // typo in a TURN variable is invisible until someone's call silently fails to connect.
+  if (env.CALLS_ENABLED) {
+    if (env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) {
+      console.log('[config] TURN: minting per-call credentials from Cloudflare Realtime.');
+    } else if (env.turnUrls.length > 0 && env.TURN_USERNAME && env.TURN_CREDENTIAL) {
+      console.log(`[config] TURN: relay configured, ${env.turnUrls.length} URL(s).`);
+    } else {
+      console.warn(
+        '[config] TURN: no relay configured. Calls between restrictive networks will not connect.',
+      );
+    }
+  }
 }
 
 export type Env = typeof env;
