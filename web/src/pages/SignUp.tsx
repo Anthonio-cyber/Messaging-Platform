@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { MIN_PASSWORD_LENGTH, passwordStrength } from '../lib/format';
 import { useAuth } from '../store/auth';
@@ -14,6 +14,10 @@ type Availability =
 
 export function SignUpPage() {
   const navigate = useNavigate();
+  // Carried through from an invite link, so joining a group does not require signing in
+  // first and then hunting for the link again.
+  const [params] = useSearchParams();
+  const next = params.get('next');
   const signUp = useAuth((s) => s.signUp);
   const identityDomain = useAuth((s) => s.identityDomain);
 
@@ -99,7 +103,7 @@ export function SignUpPage() {
         password,
         recoveryEmail: recoveryEmail.trim() || undefined,
       });
-      navigate('/app', { replace: true });
+      navigate(next || '/app', { replace: true });
     } catch (caught) {
       if (caught instanceof ApiError) {
         setError(caught.message);
@@ -121,7 +125,7 @@ export function SignUpPage() {
       footer={
         <>
           Already have an account?{' '}
-          <Link to="/sign-in" className="link font-medium">
+          <Link to={next ? `/sign-in?next=${encodeURIComponent(next)}` : '/sign-in'} className="link font-medium">
             Sign in
           </Link>
         </>

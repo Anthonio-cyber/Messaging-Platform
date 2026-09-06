@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from './store/auth';
 import { installViewportSync } from './lib/viewport';
 import { ToastProvider, Spinner, Logo } from './components/ui';
@@ -8,6 +8,7 @@ import { SignUpPage } from './pages/SignUp';
 import { SignInPage } from './pages/SignIn';
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/PasswordRecovery';
 import { PrivacyPolicyPage, TermsPage } from './pages/Legal';
+import { InvitePage } from './pages/Invite';
 import { Messenger } from './pages/messenger/Messenger';
 import { NotificationsPage } from './pages/Notifications';
 import { AdminPage } from './pages/Admin';
@@ -54,6 +55,10 @@ export default function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/privacy" element={<PrivacyPolicyPage />} />
           <Route path="/terms" element={<TermsPage />} />
+          {/* Where the invite links the server mints actually land. Handles its own
+              signed-out case rather than sitting behind RequireAuth, so an invitee
+              without an account is offered sign-up instead of only sign-in. */}
+          <Route path="/invite/:code" element={<InvitePage />} />
 
           <Route
             path="/app"
@@ -108,7 +113,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 /** Sends a signed-in visitor straight to the app instead of showing an auth screen again. */
 function PublicOnly({ children, redirect }: { children: React.ReactNode; redirect?: boolean }) {
   const status = useAuth((s) => s.status);
-  if (redirect && status === 'authenticated') return <Navigate to="/app" replace />;
+  const [params] = useSearchParams();
+  // Honour ?next= here too: someone who follows an invite link while already signed in should
+  // land on the invite, not be bounced to the inbox with the code thrown away.
+  if (redirect && status === 'authenticated') {
+    return <Navigate to={params.get('next') || '/app'} replace />;
+  }
   return <>{children}</>;
 }
 

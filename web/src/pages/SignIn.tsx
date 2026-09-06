@@ -38,7 +38,10 @@ export function SignInPage() {
       footer={
         <>
           No account yet?{' '}
-          <Link to="/sign-up" className="link font-medium">
+          <Link
+            to={params.get('next') ? `/sign-up?next=${encodeURIComponent(params.get('next')!)}` : '/sign-up'}
+            className="link font-medium"
+          >
             Create one
           </Link>
         </>

@@ -198,6 +198,46 @@ async function main() {
     if (beforeVisible) throw new Error('a newly added member could read history from before they joined');
     pass('history from before they joined stays unreadable, as the dialog promises');
 
+    // Invite links used to land on the 404 screen: the server minted /invite/<code> URLs and
+    // the app had no route for one, so every link read as "this page does not exist".
+    step('Invite links');
+    await alice.click('button:has-text("Create invite link")');
+    await alice.waitForSelector('text=/\\/invite\\//', { timeout: 20_000 });
+    const inviteUrl = await alice.locator('p.font-mono:has-text("/invite/")').first().innerText();
+    pass(`an invite link is minted — ${inviteUrl.replace(BASE, '')}`);
+
+    // Someone with no account at all: the link has to survive registration, not be lost at it.
+    const dave = await open('dave');
+    await dave.goto(inviteUrl, { waitUntil: 'networkidle' });
+    await dave.waitForSelector('text=You have been invited to a group', { timeout: 20_000 });
+    pass('a signed-out visitor gets the invite, not the not-found page');
+
+    await dave.click('a:has-text("Create an account") >> nth=0');
+    await dave.waitForURL('**/sign-up?next=**', { timeout: 20_000 });
+    const daveName = `dave${suffix}`;
+    await dave.fill('input[autocomplete="username"]', daveName);
+    await dave.fill('input[autocomplete="name"]', 'Dave Invited');
+    const davePasswords = dave.locator('input[type="password"]');
+    await davePasswords.nth(0).fill(PASSPHRASE);
+    await davePasswords.nth(1).fill(PASSPHRASE);
+    await dave.waitForSelector('text=is yours', { timeout: 20_000 });
+    await dave.click('button[type="submit"]:has-text("Create account")');
+
+    // Straight into the group, without having to find the link again.
+    await dave.waitForURL('**/app/c/**', { timeout: 60_000 });
+    await dave.waitForSelector('text=Weeknight Cooking', { timeout: 30_000 });
+    pass('registering through an invite drops you into the group');
+
+    const staleInvite = await open('stale');
+    await staleInvite.goto(`${BASE}/invite/nosuchcodehere`, { waitUntil: 'networkidle' });
+    await staleInvite.waitForSelector('text=You have been invited', { timeout: 20_000 });
+    await staleInvite.click('a:has-text("I already have one") >> nth=0');
+    await staleInvite.fill('input[autocomplete="username"]', daveName);
+    await staleInvite.fill('input[type="password"]', PASSPHRASE);
+    await staleInvite.click('button[type="submit"]:has-text("Sign in")');
+    await staleInvite.waitForSelector('text=That invite did not work', { timeout: 30_000 });
+    pass('a bad code explains itself instead of showing the not-found page');
+
     step('Privacy and settings');
     await alice.goto(`${BASE}/app/settings/privacy`, { waitUntil: 'networkidle' });
     await alice.waitForSelector('text=Who can reach you', { timeout: 20_000 });
