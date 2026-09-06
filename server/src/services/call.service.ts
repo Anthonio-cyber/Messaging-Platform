@@ -44,13 +44,79 @@ export interface IceServer {
   credential?: string;
 }
 
+/** How long a minted Cloudflare credential stays valid. Cloudflare's own ceiling is 48 hours. */
+const CLOUDFLARE_TURN_TTL_SECONDS = 2 * 60 * 60;
+
+/**
+ * Mints a short-lived TURN credential from Cloudflare Realtime.
+ *
+ * Cloudflare does not issue a fixed username and password the way a classic TURN server does —
+ * every credential is generated on demand and expires. That is a better shape than a static
+ * secret anyway: what reaches the browser is valid for a couple of hours and for one person,
+ * so a credential scraped out of a page is worth very little and cannot be used to relay
+ * traffic on the account indefinitely.
+ *
+ * The credential is tagged with the account id, which is what makes abuse visible in
+ * Cloudflare's analytics — usage can be attributed rather than just observed in aggregate.
+ *
+ * Returns null on any failure. A relay we cannot reach must not stop a call being placed: most
+ * calls connect peer-to-peer and never need one, so falling back to STUN alone is far better
+ * than refusing to dial.
+ */
+async function cloudflareTurn(userId: string): Promise<IceServer[] | null> {
+  if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return null;
+
+  try {
+    const response = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.TURN_KEY_ID)}/credentials/generate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ttl: CLOUDFLARE_TURN_TTL_SECONDS,
+          customIdentifier: userId,
+        }),
+        // Call setup waits on this, so it gets a short leash.
+        signal: AbortSignal.timeout(4000),
+      },
+    );
+
+    if (!response.ok) {
+      console.warn(`[calls] Cloudflare TURN credential request failed: ${response.status}`);
+      return null;
+    }
+
+    // Cloudflare returns { iceServers: { urls: [...], username, credential } } — an object, not
+    // the array the browser API takes. Accept either shape rather than depending on which.
+    const body = (await response.json()) as { iceServers?: IceServer | IceServer[] };
+    if (!body.iceServers) return null;
+    const entries = Array.isArray(body.iceServers) ? body.iceServers : [body.iceServers];
+    return entries.filter((entry) => entry.username && entry.credential);
+  } catch (error) {
+    console.warn('[calls] could not reach Cloudflare TURN:', (error as Error).message);
+    return null;
+  }
+}
+
 /**
  * The ICE servers a browser needs to negotiate a path. Handed out per request rather than
- * baked into the bundle, so TURN credentials can be rotated without a redeploy.
+ * baked into the bundle, so TURN credentials can be rotated without a redeploy — and so that
+ * providers issuing ephemeral credentials can be used at all.
  */
-export function iceServers(): { iceServers: IceServer[]; hasRelay: boolean } {
+export async function iceServers(userId: string): Promise<{ iceServers: IceServer[]; hasRelay: boolean }> {
   const servers: IceServer[] = [];
   if (env.stunUrls.length > 0) servers.push({ urls: env.stunUrls });
+
+  // Cloudflare first when it is configured; a static provider is the fallback for anyone
+  // running their own coturn or using a service that issues long-lived credentials.
+  const minted = await cloudflareTurn(userId);
+  if (minted && minted.length > 0) {
+    servers.push(...minted);
+    return { iceServers: servers, hasRelay: true };
+  }
 
   const hasRelay = env.turnUrls.length > 0 && Boolean(env.TURN_USERNAME && env.TURN_CREDENTIAL);
   if (hasRelay) {

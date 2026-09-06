@@ -16,8 +16,10 @@ callRouter.use(requireAuth());
  */
 callRouter.get(
   '/ice',
-  asyncRoute(async (_req, res) => {
-    const config = iceServers();
+  asyncRoute(async (req, res) => {
+    // The account id tags the minted credential, so Cloudflare's analytics can attribute
+    // relay usage to a person rather than only to the deployment as a whole.
+    const config = await iceServers(req.auth!.user.id);
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       iceServers: config.iceServers,

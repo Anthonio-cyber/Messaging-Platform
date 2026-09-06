@@ -68,6 +68,11 @@ const schema = z.object({
   TURN_URLS: z.string().default(''),
   TURN_USERNAME: z.string().optional(),
   TURN_CREDENTIAL: z.string().optional(),
+  // Cloudflare Realtime issues a fresh credential per user instead of a fixed username and
+  // password, so it needs a key rather than a secret. Set these and the server mints a
+  // short-lived credential for each call; the three variables above are then unused.
+  TURN_KEY_ID: z.string().optional(),
+  TURN_KEY_API_TOKEN: z.string().optional(),
   CALLS_ENABLED: bool(true),
 });
 

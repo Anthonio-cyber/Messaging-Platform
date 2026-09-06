@@ -978,3 +978,67 @@ describe('database-backed object storage', () => {
     );
   });
 });
+
+describe('call ICE configuration', () => {
+  let caller: Account;
+
+  before(async () => {
+    caller = await registerAccount('icecaller', 'Ice Caller');
+  });
+
+  test('hands out STUN servers to a signed-in account', async () => {
+    const response = await caller.client.get<{
+      iceServers: Array<{ urls: string | string[]; username?: string }>;
+      hasRelay: boolean;
+      callsEnabled: boolean;
+    }>('/api/calls/ice');
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.callsEnabled, true);
+    assert.ok(response.body.iceServers.length > 0, 'at least one STUN server');
+  });
+
+  test('reports honestly that no relay is configured', async () => {
+    // The test environment sets neither a Cloudflare key nor static credentials, and the
+    // client shows a warning off the back of this flag — so it must not claim a relay it
+    // does not have.
+    const response = await caller.client.get<{ hasRelay: boolean }>('/api/calls/ice');
+    assert.equal(response.body.hasRelay, false);
+  });
+
+  test('never returns a credential without a relay', async () => {
+    const response = await caller.client.get<{
+      iceServers: Array<{ username?: string; credential?: string }>;
+    }>('/api/calls/ice');
+    for (const server of response.body.iceServers) {
+      assert.equal(server.credential, undefined, 'STUN entries carry no secret');
+    }
+  });
+
+  test('falls back to STUN rather than failing when the relay provider is unreachable', async () => {
+    // A credential provider that is down, slow or misconfigured must not stop someone placing
+    // a call: most calls connect peer-to-peer and never touch a relay. Pointing at a key that
+    // cannot be honoured stands in for that outage.
+    const { iceServers } = await import('../src/services/call.service.js');
+    const previousId = process.env.TURN_KEY_ID;
+    const previousToken = process.env.TURN_KEY_API_TOKEN;
+    config.env.TURN_KEY_ID = 'not-a-real-key';
+    config.env.TURN_KEY_API_TOKEN = 'not-a-real-token';
+
+    try {
+      const result = await iceServers(caller.id);
+      assert.equal(result.hasRelay, false, 'an unreachable provider is not a relay');
+      assert.ok(result.iceServers.length > 0, 'STUN is still offered');
+    } finally {
+      config.env.TURN_KEY_ID = previousId;
+      config.env.TURN_KEY_API_TOKEN = previousToken;
+    }
+  });
+
+  test('requires a session', async () => {
+    const anonymous = new ApiClient(server.url);
+    await anonymous.bootstrap();
+    const response = await anonymous.get('/api/calls/ice');
+    assert.equal(response.status, 401);
+  });
+});
