@@ -1,0 +1,94 @@
+# Local production-shaped stack: PostgreSQL, MinIO (S3-compatible) and Veylo.
+#
+#   cp .env.example .env   # then fill in the secrets
+#   docker compose up --build
+#
+# The app answers on http://localhost:4000. MinIO's console is on :9001.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: veylo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-veylo_dev_password}
+      POSTGRES_DB: veylo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U veylo -d veylo']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  storage:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-veylo_minio_key}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-veylo_minio_secret}
+    volumes:
+      - storage-data:/data
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Creates the attachments bucket once, then exits.
+  storage-init:
+    image: minio/mc:latest
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set veylo http://storage:9000 ${STORAGE_ACCESS_KEY:-veylo_minio_key} ${STORAGE_SECRET_KEY:-veylo_minio_secret} &&
+      mc mb --ignore-existing veylo/veylo-attachments &&
+      echo 'bucket ready'"
+
+  app:
+    build:
+      context: .
+      args:
+        VITE_API_URL: ''
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: '4000'
+      DATABASE_URL: postgres://veylo:${POSTGRES_PASSWORD:-veylo_dev_password}@postgres:5432/veylo
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?set DATA_ENCRYPTION_KEY in .env}
+      APP_URL: ${APP_URL:-http://localhost:4000}
+      API_URL: ${API_URL:-http://localhost:4000}
+      IDENTITY_DOMAIN: ${IDENTITY_DOMAIN:-veylo.chat}
+      # HTTPS terminates at your load balancer; set COOKIE_SECURE=true there.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: 'true'
+      STORAGE_DRIVER: s3
+      STORAGE_ENDPOINT: http://storage:9000
+      STORAGE_BUCKET: veylo-attachments
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-veylo_minio_key}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-veylo_minio_secret}
+      STORAGE_FORCE_PATH_STYLE: 'true'
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-Veylo <no-reply@veylo.chat>}
+    ports:
+      - '4000:4000'
+    # Migrations run before the server accepts traffic.
+    command: sh -c "node server/dist/db/migrate.js && node server/dist/index.js"
+
+volumes:
+  postgres-data:
+  storage-data:

@@ -1,0 +1,20 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+coverage/
+.DS_Store
+.vscode/
+.idea/
+# Locally stored attachments. STORAGE_LOCAL_DIR is relative to the working directory, so
+# these land at the repo root when the server is started from there — match the directory
+# anywhere rather than at one path, so user data cannot be committed by accident.
+uploads/
+server/.test-uploads/
+.vercel/
+web/dist/
+*.tsbuildinfo

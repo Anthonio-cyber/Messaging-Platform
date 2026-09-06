@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Veylo design tokens.
+ * Dark is the default because the product is used at night as much as at noon,
+ * and the light theme mirrors every token so nothing is defined in one mode only.
+ */
+@layer base {
+  :root {
+    --ink: 11 14 17;
+    --surface: 18 23 28;
+    --raised: 25 31 38;
+    --line: 33 42 51;
+    --text: 232 238 243;
+    --muted: 150 163 175;
+    --faint: 106 118 130;
+    --accent: 47 191 155;
+    --accent-soft: 24 61 54;
+    --accent-ink: 4 20 16;
+    --violet: 139 123 247;
+    --danger: 240 106 106;
+    --warn: 233 178 76;
+    --ok: 72 199 142;
+  }
+
+  :root.light {
+    --ink: 247 248 250;
+    --surface: 255 255 255;
+    --raised: 243 245 248;
+    --line: 224 229 235;
+    --text: 22 28 34;
+    --muted: 92 104 116;
+    --faint: 138 149 160;
+    --accent: 17 141 112;
+    --accent-soft: 216 242 234;
+    --accent-ink: 255 255 255;
+    --violet: 95 78 216;
+    --danger: 199 54 54;
+    --warn: 168 114 15;
+    --ok: 21 128 90;
+  }
+
+  * {
+    border-color: rgb(var(--line));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink text-text font-sans antialiased;
+    margin: 0;
+    /*
+     * Horizontal insets only. Vertical safe-area padding belongs on the elements that sit
+     * against the edges (the composer, the sidebar footer) — applying it to a full-height
+     * body squeezes the shell and does nothing about the on-screen keyboard.
+     */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    text-rendering: optimizeLegibility;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /*
+   * Applied while the messenger is mounted. Pinning the body stops iOS scrolling the whole
+   * document when the composer takes focus, which would otherwise strand the header
+   * off-screen. Scrolling pages never get this class.
+   */
+  body.app-locked {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2;
+    --tw-ring-offset-color: rgb(var(--ink));
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.28);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--line));
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--faint));
+    background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /*
+   * The messenger shell. --app-height tracks window.visualViewport, so this is the area
+   * actually visible above the on-screen keyboard. 100dvh is the fallback for the first
+   * paint and for browsers without the visual viewport API.
+   */
+  .app-shell {
+    position: fixed;
+    left: 0;
+    right: 0;
+    /* --app-top follows visualViewport.offsetTop, which iOS makes non-zero when it scrolls the
+       visible area up to clear the keyboard. Without it the shell stays pinned to the layout
+       viewport and the whole app appears to slide back down behind the keyboard. */
+    top: var(--app-top, 0px);
+    height: var(--app-height, 100dvh);
+    max-height: var(--app-height, 100dvh);
+  }
+
+  /* Sits against the bottom edge. The inset collapses when the keyboard covers it. */
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  :root[data-keyboard='open'] .safe-bottom {
+    padding-bottom: 0;
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .field {
+    @apply w-full rounded-xl border border-line bg-raised px-3.5 py-2.5 text-[15px] text-text
+           placeholder:text-faint transition
+           focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25
+           disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-muted;
+  }
+
+  .pane {
+    @apply rounded-2xl border border-line bg-surface shadow-pane;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line bg-raised px-2.5 py-1
+           text-xs font-medium text-muted;
+  }
+
+  .link {
+    @apply text-accent underline-offset-4 hover:underline;
+  }
+
+  /* Message bubbles: the sender's own messages lean on the accent, others stay neutral. */
+  .bubble {
+    @apply max-w-[min(560px,78vw)] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2
+           text-[15px] leading-relaxed;
+  }
+  .bubble-mine {
+    @apply bg-accent text-accent-ink;
+  }
+  .bubble-theirs {
+    @apply border border-line bg-raised text-text;
+  }
+}
