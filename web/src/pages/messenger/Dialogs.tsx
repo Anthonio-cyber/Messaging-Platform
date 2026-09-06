@@ -16,36 +16,24 @@ const REPORT_CATEGORIES: Array<{ value: string; label: string }> = [
   { value: 'other', label: 'Something else' },
 ];
 
-/** Directory search, then a message request. */
-export function NewMessageDialog({
-  open,
-  onClose,
-  onOpened,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onOpened: (conversationId: string, requiresRequest: boolean) => void;
-}) {
-  const [query, setQuery] = useState('');
+/**
+ * Debounced directory search, shared by every dialog that picks people out of the directory.
+ * Waits for a pause in typing, aborts the in-flight request on each keystroke, and stays quiet
+ * until the term is long enough to be worth a query.
+ */
+function usePeopleSearch(query: string, enabled = true) {
   const [results, setResults] = useState<PublicUser[]>([]);
   const [searching, setSearching] = useState(false);
-  const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) {
-      setQuery('');
-      setResults([]);
-      setError(null);
-    }
-  }, [open]);
-
-  useEffect(() => {
     const term = query.trim();
-    if (term.length < 2) {
+    if (!enabled || term.length < 2) {
       setResults([]);
+      setSearching(false);
       return;
     }
+
     const controller = new AbortController();
     setSearching(true);
     const timer = window.setTimeout(async () => {
@@ -64,15 +52,42 @@ export function NewMessageDialog({
         setSearching(false);
       }
     }, 300);
+
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query]);
+  }, [query, enabled]);
+
+  return { results, searching, error };
+}
+
+/** Directory search, then a message request. */
+export function NewMessageDialog({
+  open,
+  onClose,
+  onOpened,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onOpened: (conversationId: string, requiresRequest: boolean) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [starting, setStarting] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  const { results, searching, error: searchError } = usePeopleSearch(query, open);
+  const error = startError ?? searchError;
+
+  useEffect(() => {
+    if (!open) {
+      setQuery('');
+      setStartError(null);
+    }
+  }, [open]);
 
   async function start(user: PublicUser) {
     setStarting(user.id);
-    setError(null);
+    setStartError(null);
     try {
       const response = await api.post<{ conversation: { id: string }; requiresRequest: boolean }>(
         '/api/conversations/direct',
@@ -81,7 +96,7 @@ export function NewMessageDialog({
       onOpened(response.conversation.id, response.requiresRequest);
       onClose();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not start that conversation.');
+      setStartError(caught instanceof ApiError ? caught.message : 'Could not start that conversation.');
     } finally {
       setStarting(null);
     }
@@ -172,45 +187,20 @@ export function NewGroupDialog({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<PublicUser[]>([]);
   const [selected, setSelected] = useState<PublicUser[]>([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { results } = usePeopleSearch(query, open);
 
   useEffect(() => {
     if (!open) {
       setTitle('');
       setDescription('');
       setQuery('');
-      setResults([]);
       setSelected([]);
       setError(null);
     }
   }, [open]);
-
-  useEffect(() => {
-    const term = query.trim();
-    if (term.length < 2) {
-      setResults([]);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await api.get<{ results: PublicUser[] }>(
-          `/api/users/search?q=${encodeURIComponent(term)}`,
-          controller.signal,
-        );
-        setResults(response.results);
-      } catch {
-        /* leave the previous results in place */
-      }
-    }, 300);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query]);
 
   async function create() {
     setCreating(true);
@@ -315,6 +305,153 @@ export function NewGroupDialog({
                 </button>
               </li>
             ))}
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Adds people to an existing group.
+ *
+ * Group messages are encrypted for the members the sender's device knows about *at the moment
+ * it sends*, so someone added today cannot read what was said yesterday — there is no key for
+ * them on those messages, and the server never had one to hand over. The dialog says so rather
+ * than letting people assume otherwise.
+ */
+export function AddMembersDialog({
+  open,
+  conversationId,
+  existingMemberIds,
+  onClose,
+  onAdded,
+}: {
+  open: boolean;
+  conversationId: string;
+  existingMemberIds: string[];
+  onClose: () => void;
+  onAdded: (count: number) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<PublicUser[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { results, searching } = usePeopleSearch(query, open);
+
+  useEffect(() => {
+    if (!open) {
+      setQuery('');
+      setSelected([]);
+      setError(null);
+    }
+  }, [open]);
+
+  // People already in the group, and people picked but not yet added, both drop out of the
+  // results — offering them again only invites a confusing no-op.
+  const candidates = results.filter(
+    (person) => !existingMemberIds.includes(person.id) && !selected.some((s) => s.id === person.id),
+  );
+
+  async function add() {
+    setAdding(true);
+    setError(null);
+    try {
+      const response = await api.post<{ added: string[] }>(
+        `/api/conversations/${conversationId}/members`,
+        { memberIds: selected.map((person) => person.id) },
+      );
+      onAdded(response.added.length);
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not add those people.');
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add people"
+      description="They will see messages sent from now on. Earlier messages were encrypted without them and stay unreadable."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={add} loading={adding} disabled={selected.length === 0}>
+            {selected.length > 1 ? `Add ${selected.length} people` : 'Add to group'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {error && <ErrorNotice message={error} />}
+
+        {selected.length > 0 && (
+          <ul className="flex flex-wrap gap-1.5">
+            {selected.map((person) => (
+              <li key={person.id}>
+                <button
+                  type="button"
+                  onClick={() => setSelected(selected.filter((p) => p.id !== person.id))}
+                  aria-label={`Remove ${person.displayName}`}
+                  className="chip hover:border-faint"
+                >
+                  {person.displayName}
+                  <Icon name="close" className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <Field
+          data-autofocus
+          label="Search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name or address"
+          autoCapitalize="none"
+          aria-label="Search for someone to add"
+        />
+
+        {searching && (
+          <p className="flex items-center gap-2 text-sm text-muted">
+            <Spinner className="h-3.5 w-3.5" />
+            Searching…
+          </p>
+        )}
+
+        {!searching && query.trim().length >= 2 && candidates.length === 0 && (
+          <p className="text-sm text-muted">
+            No one new matched that. People already in the group are not listed.
+          </p>
+        )}
+
+        <ul className="max-h-56 space-y-1 overflow-y-auto">
+          {candidates.map((person) => (
+            <li key={person.id}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected([...selected, person]);
+                  setQuery('');
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-raised"
+              >
+                <Avatar name={person.displayName} src={person.avatarUrl} seed={person.id} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-text">{person.displayName}</span>
+                  <span className="block truncate font-mono text-[11px] text-faint">
+                    {person.customAddress}
+                  </span>
+                </span>
+                <Icon name="plus" className="h-4 w-4 shrink-0 text-faint" />
+              </button>
+            </li>
+          ))}
         </ul>
       </div>
     </Modal>

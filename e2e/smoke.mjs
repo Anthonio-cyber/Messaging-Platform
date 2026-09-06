@@ -162,6 +162,42 @@ async function main() {
     await bob.waitForSelector('text=Recipes only in here', { timeout: 30_000 });
     pass('a second group member decrypts a group message');
 
+    // Adding people to a group used to be impossible from the UI: the API route existed and
+    // the info panel listed members, but nothing rendered a control to add one.
+    const carolName = `carol${suffix}`;
+    const carol = await open('carol');
+    await register(carol, carolName, 'Carol Adds');
+
+    await alice.click('button[aria-label="Conversation details"]');
+    await alice.waitForSelector('button:has-text("Add people")', { timeout: 20_000 });
+    await alice.click('button:has-text("Add people")');
+    await alice.fill('input[aria-label="Search for someone to add"]', carolName);
+    await alice.waitForSelector(`[role="dialog"] button:has-text("${carolName}@veylo.chat")`, {
+      timeout: 20_000,
+    });
+    await alice.click(`[role="dialog"] button:has-text("${carolName}@veylo.chat")`);
+    await alice.locator('[role="dialog"] button:has-text("Add to group")').click();
+    await alice.waitForSelector('text=Added 1 person to the group', { timeout: 20_000 });
+    pass('an admin can add someone to an existing group');
+
+    await alice.fill('textarea[aria-label="Message"]', 'Carol has joined us.');
+    await alice.click('button[aria-label="Send message"]');
+
+    await carol.goto(`${BASE}/app`, { waitUntil: 'networkidle' });
+    await carol.waitForSelector('button:has-text("Weeknight Cooking")', { timeout: 30_000 });
+    await carol.click('button:has-text("Weeknight Cooking")');
+    await carol.waitForSelector('text=Carol has joined us', { timeout: 30_000 });
+    pass('the added member receives and decrypts messages sent after they joined');
+
+    // Messages sent before she was added were encrypted without a key for her, so they are
+    // not merely hidden — there is nothing on the server that could decrypt them for her.
+    const beforeVisible = await carol
+      .waitForSelector('text=Recipes only in here', { timeout: 4000 })
+      .then(() => true)
+      .catch(() => false);
+    if (beforeVisible) throw new Error('a newly added member could read history from before they joined');
+    pass('history from before they joined stays unreadable, as the dialog promises');
+
     step('Privacy and settings');
     await alice.goto(`${BASE}/app/settings/privacy`, { waitUntil: 'networkidle' });
     await alice.waitForSelector('text=Who can reach you', { timeout: 20_000 });

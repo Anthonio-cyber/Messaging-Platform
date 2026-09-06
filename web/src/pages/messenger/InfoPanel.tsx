@@ -5,7 +5,7 @@ import { useChat, type DecryptedMessage } from '../../store/chat';
 import { keyFingerprint } from '../../lib/crypto';
 import { formatBytes, formatTimestamp } from '../../lib/format';
 import { Avatar, Button, Icon, Modal, Select, useToast } from '../../components/ui';
-import { ReportDialog } from './Dialogs';
+import { AddMembersDialog, ReportDialog } from './Dialogs';
 
 export function InfoPanel({
   conversation,
@@ -27,11 +27,16 @@ export function InfoPanel({
   const [reportOpen, setReportOpen] = useState(false);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const isGroup = conversation.type === 'group';
   const other = conversation.otherMember;
   const isAdmin = conversation.myRole !== 'member';
+  // The group's own who_can_add setting decides this, exactly as the server does — an admins-only
+  // group hides the button from members rather than letting them press it into a 403.
+  const canAddMembers =
+    isGroup && (isAdmin || (conversation.permissions?.who_can_add ?? 'admins') === 'everyone');
 
   useEffect(() => {
     if (!open || isGroup || !other?.publicKey) {
@@ -239,6 +244,18 @@ export function InfoPanel({
 
           {isGroup && (
             <Section title={`Members (${members.length})`}>
+              {canAddMembers && (
+                <button
+                  type="button"
+                  onClick={() => setAddOpen(true)}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-raised"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-faint text-faint">
+                    <Icon name="plus" className="h-4 w-4" />
+                  </span>
+                  <span className="text-sm font-medium text-accent">Add people</span>
+                </button>
+              )}
               <ul className="space-y-1">
                 {members.map((member) => (
                   <li key={member.userId} className="flex items-center gap-2.5 rounded-lg px-1 py-1.5">
@@ -399,6 +416,23 @@ export function InfoPanel({
         onClose={() => setReportOpen(false)}
         target={other ? { type: 'user', userId: other.id, conversationId: conversation.id } : null}
         onSubmitted={() => toast.push('Report received. Our moderation team will review it.', 'success')}
+      />
+
+      <AddMembersDialog
+        open={addOpen}
+        conversationId={conversation.id}
+        existingMemberIds={members.map((member) => member.userId)}
+        onClose={() => setAddOpen(false)}
+        onAdded={(count) => {
+          void reloadMembers(conversation.id);
+          void loadConversations();
+          toast.push(
+            count === 0
+              ? 'Everyone you picked was already in the group.'
+              : `Added ${count} ${count === 1 ? 'person' : 'people'} to the group.`,
+            count === 0 ? 'info' : 'success',
+          );
+        }}
       />
     </>
   );

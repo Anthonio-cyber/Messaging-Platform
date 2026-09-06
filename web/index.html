@@ -2,7 +2,16 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!--
+      interactive-widget=resizes-content is what makes the on-screen keyboard shrink the
+      layout viewport instead of sliding over the top of it. Chrome on Android defaults to
+      resizes-visual, which leaves the page full height and puts the composer behind the
+      keyboard; every dvh unit and every fixed element then measures the wrong box.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="theme-color" content="#0b0e11" />
     <meta
       name="description"

@@ -160,10 +160,52 @@ async function main() {
         .catch(() => false),
     );
 
-    console.log('\nDeclining a call');
+    console.log('\nVideo call');
+    // This is the case the audio-only assertions above missed for a whole release: the remote
+    // <video> only mounts once the phase reaches "active", while the MediaStream object it
+    // needs never changes identity — so an effect keyed on the stream fired before the element
+    // existed and never again, and the far side stayed black while your own preview worked.
     await caller.click('button[aria-label^="Video call "]');
     await callee.waitForSelector('text=Incoming video call', { timeout: 30_000 });
     check('a video call rings as a video call', true);
+    await callee.click('button[aria-label="Answer call"]');
+
+    const remoteVideoLive = async (page) =>
+      page
+        .waitForFunction(
+          () => {
+            // The small mirrored element is the local preview; the full-bleed one is the peer.
+            const remote = [...document.querySelectorAll('video')].find(
+              (element) => !element.muted,
+            );
+            const stream = remote?.srcObject;
+            return (
+              stream instanceof MediaStream &&
+              stream.getVideoTracks().length > 0 &&
+              remote.videoWidth > 0
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+
+    check('the caller sees the other person, not just themselves', await remoteVideoLive(caller));
+    check('the callee sees the other person, not just themselves', await remoteVideoLive(callee));
+
+    const selfPreview = await caller.evaluate(() => {
+      const local = [...document.querySelectorAll('video')].find((element) => element.muted);
+      const stream = local?.srcObject;
+      return stream instanceof MediaStream && stream.getVideoTracks().length > 0;
+    });
+    check('the local preview is still attached alongside it', selfPreview);
+
+    await caller.click('button[aria-label="End call"]');
+    await caller.waitForSelector('textarea[aria-label="Message"]', { timeout: 15_000 });
+
+    console.log('\nDeclining a call');
+    await caller.click('button[aria-label^="Video call "]');
+    await callee.waitForSelector('text=Incoming video call', { timeout: 30_000 });
     await callee.click('button[aria-label="Decline call"]');
     check(
       'the caller is told it was declined',
@@ -178,7 +220,7 @@ async function main() {
       const response = await fetch('/api/calls/history', { credentials: 'include' });
       return response.json();
     });
-    check('both calls were recorded', history.calls?.length >= 2, `${history.calls?.length} entries`);
+    check('every call was recorded', history.calls?.length >= 3, `${history.calls?.length} entries`);
     check(
       'the declined call is recorded as declined',
       history.calls?.some((c) => c.status === 'declined'),

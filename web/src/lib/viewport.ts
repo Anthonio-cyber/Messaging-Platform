@@ -23,6 +23,14 @@ export function installViewportSync(): () => void {
     const height = viewport?.height ?? window.innerHeight;
     root.style.setProperty('--app-height', `${Math.round(height)}px`);
 
+    // iOS does not only shrink the visible area — it *scrolls* the visual viewport up inside
+    // the layout viewport to bring the focused field above the keyboard. A `position: fixed`
+    // shell is anchored to the layout viewport, so it stays put while the visible window moves
+    // out from under it, and the app appears to slide back down behind the keyboard. Offsetting
+    // the shell by the same amount pins it to what is actually on screen.
+    const offsetTop = viewport?.offsetTop ?? 0;
+    root.style.setProperty('--app-top', `${Math.round(offsetTop)}px`);
+
     // The keyboard is up when the visual viewport is meaningfully shorter than the layout
     // one. Used to drop the safe-area padding, which would otherwise add a dead strip
     // between the composer and the keyboard.
@@ -44,6 +52,7 @@ export function installViewportSync(): () => void {
     window.removeEventListener('orientationchange', apply);
     window.removeEventListener('resize', apply);
     root.style.removeProperty('--app-height');
+    root.style.removeProperty('--app-top');
     delete root.dataset.keyboard;
   };
 }

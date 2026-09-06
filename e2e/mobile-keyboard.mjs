@@ -127,6 +127,45 @@ async function main() {
       inset ?? 'no bottom-edge element on this screen',
     );
 
+    console.log('\nWith iOS also scrolling the visual viewport up');
+    // The other half of what iOS does: as well as shrinking the visible area, it scrolls that
+    // area up inside the layout viewport to lift the focused field clear of the keyboard.
+    // `position: fixed` is anchored to the *layout* viewport, so a shell that ignores this
+    // stays where it was while the visible window slides out from under it — the app appears
+    // to drop back down behind the keyboard, which is precisely the reported symptom.
+    const OFFSET_PX = 96;
+    await page.evaluate((offset) => {
+      const viewport = window.visualViewport;
+      Object.defineProperty(viewport, 'offsetTop', { configurable: true, get: () => offset });
+      viewport.dispatchEvent(new Event('scroll'));
+    }, OFFSET_PX);
+    await page.waitForTimeout(300);
+
+    const scrolled = await page.evaluate(() => {
+      const rect = document.querySelector('.app-shell').getBoundingClientRect();
+      return {
+        top: Math.round(rect.top),
+        offsetTop: Math.round(window.visualViewport.offsetTop),
+        appTop: getComputedStyle(document.documentElement).getPropertyValue('--app-top').trim(),
+      };
+    });
+
+    check('--app-top follows the visual viewport offset', scrolled.appTop === `${OFFSET_PX}px`, scrolled.appTop);
+    check(
+      'the shell moves with the visible area instead of sliding out from under it',
+      Math.abs(scrolled.top - scrolled.offsetTop) <= 1,
+      `shell top ${scrolled.top}px vs visible top ${scrolled.offsetTop}px`,
+    );
+
+    const widget = await page.evaluate(
+      () => document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? '',
+    );
+    check(
+      'the viewport meta asks Chrome to resize the layout viewport for the keyboard',
+      widget.includes('interactive-widget=resizes-content'),
+      widget,
+    );
+
     console.log(`\n${failures === 0 ? 'All keyboard checks passed.' : `${failures} check(s) failed.`}`);
   } finally {
     await browser.close();

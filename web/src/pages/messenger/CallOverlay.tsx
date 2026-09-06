@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useCall } from '../../store/call';
 import { formatCallDuration } from '../../lib/webrtc';
 import { Avatar, Icon } from '../../components/ui';
@@ -169,21 +169,41 @@ function ActiveCall({
   onToggleMic: () => void;
   onToggleCamera: () => void;
 }) {
-  const localVideo = useRef<HTMLVideoElement>(null);
-  const remoteVideo = useRef<HTMLVideoElement>(null);
-  const remoteAudio = useRef<HTMLAudioElement>(null);
   const duration = useCallDuration(startedAt);
 
-  useEffect(() => {
-    if (localVideo.current && localStream) localVideo.current.srcObject = localStream;
-  }, [localStream]);
+  /*
+   * Streams are attached in a callback ref rather than an effect, and that is the whole fix
+   * for "I can see myself but not them".
+   *
+   * CallSession reuses one MediaStream object for the remote side and only adds tracks to it,
+   * so the value never changes identity. An effect keyed on the stream therefore fires exactly
+   * once — when the first track arrives, while the phase is still `connecting` and the remote
+   * <video> has not been rendered yet. By the time the phase reaches `active` and the element
+   * mounts, the effect has no reason to run again, so srcObject is never set and the far side
+   * stays black. The audio element escaped this only because it is always mounted, which is
+   * why voice calls sounded fine.
+   *
+   * A callback ref runs when the element mounts, which is exactly when the assignment has to
+   * happen. The local preview has the same problem for the same reason: toggling the camera
+   * off and on remounts it.
+   */
+  const attachRemote = useCallback(
+    (element: HTMLVideoElement | HTMLAudioElement | null) => {
+      if (element && remoteStream && element.srcObject !== remoteStream) {
+        element.srcObject = remoteStream;
+      }
+    },
+    [remoteStream],
+  );
 
-  useEffect(() => {
-    // Video and audio both need the remote stream: the audio element carries the sound on
-    // voice calls, where no video element is rendered at all.
-    if (remoteVideo.current && remoteStream) remoteVideo.current.srcObject = remoteStream;
-    if (remoteAudio.current && remoteStream) remoteAudio.current.srcObject = remoteStream;
-  }, [remoteStream]);
+  const attachLocal = useCallback(
+    (element: HTMLVideoElement | null) => {
+      if (element && localStream && element.srcObject !== localStream) {
+        element.srcObject = localStream;
+      }
+    },
+    [localStream],
+  );
 
   const isVideo = kind === 'video';
   const connected = phase === 'active';
@@ -203,12 +223,12 @@ function ActiveCall({
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-ink">
       {/* Remote audio always renders; on a voice call it is the only media element. */}
-      <audio ref={remoteAudio} autoPlay playsInline className="hidden" />
+      <audio ref={attachRemote} autoPlay playsInline className="hidden" />
 
       <div className="relative flex-1 overflow-hidden">
         {isVideo && connected ? (
           <video
-            ref={remoteVideo}
+            ref={attachRemote}
             autoPlay
             playsInline
             className="h-full w-full bg-black object-cover"
@@ -232,7 +252,7 @@ function ActiveCall({
         {/* Own camera preview, mirrored the way people expect to see themselves. */}
         {isVideo && localStream && cameraEnabled && (
           <video
-            ref={localVideo}
+            ref={attachLocal}
             autoPlay
             playsInline
             muted
