@@ -24,7 +24,8 @@
     "e2e": "node e2e/smoke.mjs",
     "e2e:mobile": "node e2e/mobile-keyboard.mjs",
     "e2e:calls": "node e2e/calls.mjs",
-    "migrate:deploy": "npm run migrate:deploy --workspace server"
+    "migrate:deploy": "npm run migrate:deploy --workspace server",
+    "e2e:typing": "node e2e/typing-focus.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

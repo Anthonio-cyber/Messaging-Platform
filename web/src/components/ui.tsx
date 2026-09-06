@@ -327,12 +327,26 @@ export function Modal({
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
+  /*
+   * onClose is held in a ref so it can stay out of the effect's dependencies.
+   *
+   * Every caller passes an inline arrow, which gets a fresh identity on each render of the
+   * parent. With onClose in the dependency array, any unrelated re-render of that parent tore
+   * this effect down and rebuilt it — and the teardown calls previous?.focus(), which throws
+   * focus back to whatever was focused before the dialog opened. Someone halfway through
+   * typing a name lost the caret to the button behind the dialog and had to click back in for
+   * the next letter. The effect is about the dialog being open; it should re-run only when
+   * that changes.
+   */
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
       if (event.key !== 'Tab' || !ref.current) return;
 
       // Keep focus inside the dialog while it is open.
@@ -362,7 +376,7 @@ export function Modal({
       document.body.style.overflow = '';
       previous?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

@@ -304,18 +304,26 @@ export const useChat = create<ChatState>((set, get) => ({
     });
 
     // Expire stale typing indicators even if the "stopped" event is lost.
+    //
+    // The check happens before set(), not inside it. Returning {} from an updater is not a
+    // no-op: zustand still builds a new state object and notifies every subscriber, so this
+    // timer was re-rendering the whole messenger twice a second-and-a-half whether or not
+    // anything had expired. Components that pass an inline callback into a child's effect —
+    // Modal is the one that bit — were being torn down and rebuilt on that beat, which threw
+    // focus out of whatever field someone was typing in.
     typingSweep = window.setInterval(() => {
       const now = Date.now();
-      set((current) => {
-        let changed = false;
-        const next: Record<string, TypingEntry[]> = {};
-        for (const [key, entries] of Object.entries(current.typing)) {
-          const live = entries.filter((entry) => entry.expiresAt > now);
-          if (live.length !== entries.length) changed = true;
-          next[key] = live;
-        }
-        return changed ? { typing: next } : {};
-      });
+      const current = get().typing;
+      let changed = false;
+      const next: Record<string, TypingEntry[]> = {};
+
+      for (const [key, entries] of Object.entries(current)) {
+        const live = entries.filter((entry) => entry.expiresAt > now);
+        if (live.length !== entries.length) changed = true;
+        next[key] = live;
+      }
+
+      if (changed) set({ typing: next });
     }, 2000);
   },
 
