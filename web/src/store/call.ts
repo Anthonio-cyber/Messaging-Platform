@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
 import { realtime } from '../lib/realtime';
+import { showDesktopNotification } from '../lib/notifications';
 import { CallSession, isCallingSupported, type IceConfig } from '../lib/webrtc';
 
 /**
@@ -130,6 +131,17 @@ export const useCall = create<CallState>((set, get) => ({
         error: null,
         endedReason: null,
       });
+
+      // The ringtone is useless if Veylo is in a background tab — a muted tab plays nothing,
+      // and a person looking at something else hears nothing either way. This is the only
+      // thing that gets their attention, and it no-ops when the tab is already in front.
+      showDesktopNotification({
+        title: `${payload.from.displayName} is calling`,
+        body: payload.kind === 'video' ? 'Incoming video call' : 'Incoming voice call',
+        // Tagged by call so a second ring from the same call replaces the first.
+        tag: `call:${payload.callId}`,
+      });
+
       realtime.emit('call:ringing', { callId: payload.callId });
     });
 

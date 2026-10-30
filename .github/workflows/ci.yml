@@ -111,6 +111,9 @@ jobs:
           npx wait-on http://127.0.0.1:4000/api/health http://localhost:5173 --timeout 120000
 
       - run: npm run e2e
+      - run: npm run e2e:status
+      - run: npm run e2e:typing
+      - run: npm run e2e:mobile
 
       - name: Server log on failure
         if: failure()

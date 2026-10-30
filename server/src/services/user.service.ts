@@ -173,6 +173,7 @@ export function toSelfProfile(user: UserRow, privacy: PrivacySettingsRow, recove
       discoverable: privacy.discoverable,
       readReceipts: privacy.read_receipts,
       typingIndicators: privacy.typing_indicators,
+      statusAudience: privacy.status_audience,
     },
   };
 }

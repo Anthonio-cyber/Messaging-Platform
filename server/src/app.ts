@@ -20,6 +20,7 @@ import { fileRouter } from './routes/file.routes.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { syncRouter } from './routes/sync.routes.js';
 import { callRouter } from './routes/call.routes.js';
+import { statusRouter } from './routes/status.routes.js';
 import { pool } from './db/pool.js';
 
 export function createApp(): Express {
@@ -80,6 +81,7 @@ export function createApp(): Express {
   app.use('/api/admin', adminRouter);
   app.use('/api/sync', syncRouter);
   app.use('/api/calls', callRouter);
+  app.use('/api/statuses', statusRouter);
 
   serveWebApp(app);
 
@@ -114,6 +116,10 @@ function serveWebApp(app: Express): void {
       maxAge: '1y',
       setHeaders(res, filePath) {
         if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-store');
+        // The service worker is not fingerprinted, so a year-long cache would pin browsers to
+        // whichever copy they happened to fetch first. Browsers revalidate it anyway, but
+        // saying so explicitly costs nothing and does not rely on that behaviour.
+        if (filePath.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
       },
     }),
   );

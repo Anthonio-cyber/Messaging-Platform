@@ -142,6 +142,7 @@ export interface PrivacySettings {
   discoverable: boolean;
   readReceipts: boolean;
   typingIndicators: boolean;
+  statusAudience: 'contacts' | 'nobody';
 }
 
 export interface SelfUser {

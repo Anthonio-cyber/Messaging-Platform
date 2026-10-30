@@ -123,6 +123,22 @@ export function PrivacySettingsPage() {
         </div>
       </SettingsSection>
 
+      <SettingsSection
+        title="Status"
+        description="A status is encrypted for a fixed list of people when you post it, so the audience is decided then and cannot widen afterwards."
+      >
+        <Select
+          label="Who can see my status"
+          value={privacy.statusAudience}
+          onChange={(value) => update({ statusAudience: value })}
+          options={[
+            { value: 'contacts', label: 'My contacts' },
+            { value: 'nobody', label: 'Nobody' },
+          ]}
+          description="There is no 'everyone' here on purpose: each viewer needs their own copy of the key, so the audience has to be a list Veylo can enumerate."
+        />
+      </SettingsSection>
+
       <SettingsSection title="What Veylo can still see">
         <ul className="space-y-2.5 text-sm leading-relaxed text-muted">
           {[

@@ -278,6 +278,40 @@ builds.
 
 ---
 
+## Push notifications
+
+Without `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`, Veylo notifies a device only while it is
+open in a tab. That is a supported configuration — the settings page says so rather than
+offering a switch that does nothing. With them, messages and calls reach a device with Veylo
+closed.
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+The public key is served to browsers; that is its purpose. The private key is what proves to a
+push service that a notification came from this deployment, so it belongs with the other
+secrets. Rotating the pair invalidates every existing subscription: devices re-subscribe the
+next time someone opens the toggle in Settings, so rotate it knowing people go quiet until
+they do.
+
+### What leaves the deployment
+
+This is the only part of Veylo that depends on infrastructure you do not run, so it is worth
+being exact with users about it.
+
+| | |
+| --- | --- |
+| Push service sees | That an endpoint received a notification, its size, and when |
+| Push service cannot see | The payload — it is encrypted to the browser's own keys (RFC 8291) |
+| Payload contains | Who sent it and which conversation to open |
+| Payload never contains | Message content. The server holds ciphertext; there is nothing else it could put in |
+
+The richer notification someone sees with Veylo open is written by the page from the decrypted
+message and never leaves the device. The one from a push is generic by necessity.
+
+---
+
 ## Reverse proxy
 
 WebSockets need upgrade headers passed through, and `TRUST_PROXY=true` so client IPs are read

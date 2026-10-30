@@ -5,6 +5,7 @@ import { createRealtimeServer, shutdownRealtime } from './realtime/socket.js';
 import { closePool, pool, query } from './db/pool.js';
 import { purgeExpiredSessions } from './services/session.service.js';
 import { expireStaleCalls } from './services/call.service.js';
+import { purgeExpiredStatuses } from './services/status.service.js';
 
 async function main(): Promise<void> {
   // Refuse to serve traffic against a database we cannot reach.
@@ -36,6 +37,13 @@ async function main(): Promise<void> {
     expireStaleCalls().catch((error) => console.error('[cleanup] call sweep failed', error));
   }, 60_000);
   callSweep.unref();
+
+  // A status that says it disappears after a day has to actually disappear, blob and all —
+  // an expiry check the read path happens to respect is a promise, not a deletion.
+  const statusSweep = setInterval(() => {
+    purgeExpiredStatuses().catch((error) => console.error('[cleanup] status sweep failed', error));
+  }, 10 * 60_000);
+  statusSweep.unref();
 
   httpServer.listen(env.PORT, env.HOST, () => {
     console.log(`[veylo] ${env.BRAND_NAME} API listening on http://${env.HOST}:${env.PORT}`);

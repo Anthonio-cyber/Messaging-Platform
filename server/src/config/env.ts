@@ -74,6 +74,14 @@ const schema = z.object({
   TURN_KEY_ID: z.string().optional(),
   TURN_KEY_API_TOKEN: z.string().optional(),
   CALLS_ENABLED: bool(true),
+
+  // Web Push. Generate a pair once with `npx web-push generate-vapid-keys` and keep the private
+  // one secret: it is what proves to a push service that a notification came from this
+  // deployment. The public key is served to browsers, which is what it is for.
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  // Push services require a contact for the sender; mailto: is the convention.
+  VAPID_SUBJECT: z.string().default('mailto:admin@veylo.chat'),
 });
 
 const parsed = schema.safeParse(process.env);

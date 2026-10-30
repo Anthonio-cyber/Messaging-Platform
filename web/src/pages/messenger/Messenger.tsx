@@ -8,6 +8,7 @@ import { ConversationPanel } from './ConversationPanel';
 import { NewGroupDialog, NewMessageDialog } from './Dialogs';
 import { VaultUnlockError } from '../../lib/crypto';
 import { lockAppShell } from '../../lib/viewport';
+import { bindStatusRealtime } from '../../store/status';
 import { useCall } from '../../store/call';
 import { CallOverlay } from './CallOverlay';
 
@@ -34,6 +35,10 @@ export function Messenger() {
 
   // Only the messenger locks the document; every other screen scrolls normally.
   useEffect(() => lockAppShell(), []);
+
+  // Statuses refresh themselves when a contact posts. Bound here rather than in the store's
+  // own init so it follows the messenger's lifetime, like every other realtime handler.
+  useEffect(() => bindStatusRealtime(), []);
 
   // Call signalling binds once for the whole session, so an incoming call reaches the user
   // wherever they are in the app.

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from './store/auth';
 import { installViewportSync } from './lib/viewport';
+import { registerServiceWorker } from './lib/notifications';
 import { ToastProvider, Spinner, Logo } from './components/ui';
 import { LandingPage } from './pages/Landing';
 import { SignUpPage } from './pages/SignUp';
@@ -40,6 +41,14 @@ export default function App() {
   // Publishes the visual viewport height so the messenger can size itself above a phone's
   // on-screen keyboard. Installed app-wide because orientation changes affect every screen.
   useEffect(() => installViewportSync(), []);
+
+  // Registering the worker is not the same as subscribing to push, and asks for nothing: the
+  // permission prompt only ever comes from the toggle in Settings. Doing it here means a
+  // browser that was already subscribed keeps receiving notifications after a deploy, rather
+  // than silently losing them until someone next opens that page.
+  useEffect(() => {
+    void registerServiceWorker();
+  }, []);
 
   if (status === 'loading') return <BootScreen />;
 

@@ -76,5 +76,9 @@ export const limiters = {
   sendMessage: rateLimit('send', { windowMs: 60_000, max: 120, message: 'You are sending messages very quickly. Slow down a little.' }),
   messageRequest: rateLimit('request', { windowMs: 60 * 60_000, max: 20, message: 'You have sent a lot of message requests recently. Try again later.' }),
   report: rateLimit('report', { windowMs: 60 * 60_000, max: 15 }),
+  // A status reaches every contact at once, so it is deliberately far tighter than
+  // messaging: nobody posts thirty in an hour, and a compromised session should not be
+  // able to spray the author's whole contact list.
+  postStatus: rateLimit('status', { windowMs: 60 * 60_000, max: 30, message: 'You have posted a lot of statuses recently. Try again later.' }),
   api: rateLimit('api', { windowMs: 60_000, max: 600 }),
 };

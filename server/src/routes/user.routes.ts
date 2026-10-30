@@ -78,6 +78,9 @@ userRouter.patch(
         discoverable: z.boolean().optional(),
         readReceipts: z.boolean().optional(),
         typingIndicators: z.boolean().optional(),
+        // No 'everyone': status keys are wrapped per recipient, so the audience has to be
+        // enumerable. Offering a value the crypto cannot honour would be a lie in a dropdown.
+        statusAudience: z.enum(['contacts', 'nobody']).optional(),
       }),
       req.body,
     );
@@ -91,6 +94,7 @@ userRouter.patch(
       discoverable: 'discoverable',
       readReceipts: 'read_receipts',
       typingIndicators: 'typing_indicators',
+      statusAudience: 'status_audience',
     };
 
     await getPrivacy(req.auth!.user.id);

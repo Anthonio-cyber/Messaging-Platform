@@ -159,8 +159,32 @@ export interface MessagePayload {
   }>;
 }
 
-export async function encryptForMembers(
-  payload: MessagePayload,
+/**
+ * A status body. Separate from MessagePayload because a status is not a message: it has no
+ * thread, no reply, and at most one image.
+ */
+export interface StatusPayload {
+  caption: string;
+  /** A CSS colour for a text status, chosen in the composer. */
+  background?: string;
+  media?: {
+    id: string;
+    key: string;
+    nonce: string;
+    mimeType: string;
+  };
+}
+
+/**
+ * Seals a payload for a fixed set of recipients: one random content key, then one copy of that
+ * key sealed to each recipient's public key.
+ *
+ * Generic over the payload because the body is only ever JSON — messages and statuses differ in
+ * what they contain, not in how they are encrypted, and giving them two copies of this would
+ * mean two places to get the crypto right.
+ */
+export async function encryptForMembers<T = MessagePayload>(
+  payload: T,
   members: KeyRecipient[],
 ): Promise<EncryptedPayload> {
   const s = await sodiumReady();
@@ -188,10 +212,10 @@ export interface DecryptionIdentity {
   privateKey: Uint8Array;
 }
 
-export async function decryptMessage(
+export async function decryptMessage<T = MessagePayload>(
   message: { ciphertext: string; nonce: string; wrappedKey: string | null },
   identity: DecryptionIdentity,
-): Promise<MessagePayload | null> {
+): Promise<T | null> {
   if (!message.wrappedKey || !message.ciphertext) return null;
   const s = await sodiumReady();
   try {
@@ -205,8 +229,12 @@ export async function decryptMessage(
       fromB64(message.nonce),
       messageKey,
     );
-    const parsed = JSON.parse(s.to_string(plaintext)) as MessagePayload;
-    return typeof parsed?.text === 'string' ? parsed : null;
+    // Shape is checked only as far as "an object came back". It used to require a string
+    // `text`, which is true of a message and false of a status, and would have quietly
+    // reported every status as undecryptable. What each payload must contain belongs to the
+    // caller that knows which kind it asked for.
+    const parsed: unknown = JSON.parse(s.to_string(plaintext));
+    return parsed !== null && typeof parsed === 'object' ? (parsed as T) : null;
   } catch {
     // A message sealed to a key this device no longer holds (rotated key, joined a group
     // later). Callers render this as "cannot be decrypted" rather than failing.

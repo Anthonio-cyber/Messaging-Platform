@@ -6,6 +6,7 @@ import { formatTimestamp } from '../../lib/format';
 import { Avatar, Button, EmptyState, Icon, Skeleton, Wordmark } from '../../components/ui';
 import { describeTransport } from '../../lib/realtime';
 import type { ConversationSummary } from '../../lib/api';
+import { StatusTray } from './Status';
 
 type Tab = 'all' | 'groups' | 'requests';
 
@@ -100,6 +101,8 @@ export function Sidebar({
           />
         </div>
       </div>
+
+      <StatusTray />
 
       <nav className="flex gap-1 border-b border-line px-3 pb-2" aria-label="Conversation filters">
         <TabButton active={tab === 'all'} onClick={() => setTab('all')} label="All" count={totalUnread} />

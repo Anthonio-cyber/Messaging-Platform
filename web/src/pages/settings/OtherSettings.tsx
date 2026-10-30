@@ -3,7 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../store/auth';
 import { deriveAuthenticator } from '../../lib/crypto';
-import { notificationPermission, requestNotificationPermission } from '../../lib/notifications';
+import {
+  notificationPermission,
+  pushState,
+  requestNotificationPermission,
+  subscribeToPush,
+  unsubscribeFromPush,
+  type PushState,
+} from '../../lib/notifications';
 import { formatTimestamp } from '../../lib/format';
 import { Avatar, Button, ErrorNotice, Field, Icon, Modal, Toggle, useToast } from '../../components/ui';
 import { SettingsSection } from './Settings';
@@ -12,12 +19,39 @@ export function NotificationSettingsPage() {
   const toast = useToast();
   const [permission, setPermission] = useState(notificationPermission());
   const [soundOn, setSoundOn] = useState(() => localStorage.getItem('veylo.sound') !== 'off');
+  const [push, setPush] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void pushState().then(setPush);
+  }, []);
 
   async function enable() {
     const result = await requestNotificationPermission();
     setPermission(result);
     if (result === 'denied') {
       toast.push('Your browser is blocking notifications. Change it in site settings.', 'error');
+    }
+  }
+
+  async function togglePush(wanted: boolean) {
+    setBusy(true);
+    try {
+      if (wanted) {
+        const result = await subscribeToPush();
+        if (!result.ok) {
+          toast.push(result.reason, 'error');
+        } else {
+          toast.push('This device will now be notified when Veylo is closed.', 'success');
+          setPermission(notificationPermission());
+        }
+      } else {
+        await unsubscribeFromPush();
+        toast.push('This device will no longer be notified when Veylo is closed.', 'success');
+      }
+      setPush(await pushState());
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -47,9 +81,62 @@ export function NotificationSettingsPage() {
           </Button>
         )}
         <p className="mt-3 text-sm leading-relaxed text-faint">
-          Notification text is generated on this device from the decrypted message. Veylo's servers never
-          see it, and it never travels through a push service.
+          While Veylo is open, notification text is written on this device from the decrypted message.
+          Veylo's servers never see it and it never leaves your browser.
         </p>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Notifications while Veylo is closed"
+        description="Messages and calls can reach this device even when Veylo is not open in any tab."
+      >
+        {push === null ? (
+          <p className="text-sm text-muted">Checking this browser…</p>
+        ) : !push.supported ? (
+          <p className="text-sm text-muted">
+            This browser cannot receive notifications while Veylo is closed. On iPhone and iPad this
+            needs Veylo added to the Home Screen first.
+          </p>
+        ) : !push.enabledOnServer ? (
+          <p className="flex items-start gap-2 text-sm text-warn">
+            <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
+            This deployment has no push keys configured, so Veylo can only notify you while it is open.
+          </p>
+        ) : (
+          <>
+            <Toggle
+              label="Notify this device when Veylo is closed"
+              description={
+                push.devices > 0
+                  ? `${push.devices} ${push.devices === 1 ? 'device is' : 'devices are'} set up on your account.`
+                  : undefined
+              }
+              checked={push.subscribed}
+              disabled={busy}
+              onChange={(value) => void togglePush(value)}
+            />
+            <div className="mt-3 space-y-2 text-sm leading-relaxed text-faint">
+              <p>
+                This is the one part of Veylo that relies on someone else's infrastructure. Turning it on
+                registers this browser with its vendor's push service — Google's, Mozilla's or Apple's,
+                depending on the browser.
+              </p>
+              <p>
+                <span className="font-medium text-muted">What they cannot see:</span> the contents of the
+                notification. It is encrypted to this browser's own keys before it leaves Veylo, and only
+                this browser can open it. Message text is never in it at all — Veylo's servers hold only
+                ciphertext, so a push says &ldquo;Sent you a message&rdquo; and the full text appears once
+                you open the app.
+              </p>
+              <p>
+                <span className="font-medium text-muted">What they can see:</span> that your device was
+                sent a notification, and when. Over time that reveals the rhythm of when you are being
+                contacted, though not by whom or about what. That is inherent to how push works on the web,
+                not a choice Veylo made, and it is the reason this is off until you switch it on.
+              </p>
+            </div>
+          </>
+        )}
       </SettingsSection>
 
       <SettingsSection title="In-app">

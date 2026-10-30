@@ -1,5 +1,6 @@
 import { many, one, query } from '../db/pool.js';
 import { emitToUser } from '../realtime/emitter.js';
+import { sendPush } from './push.service.js';
 
 export type NotificationType =
   | 'new_message'
@@ -45,6 +46,24 @@ export async function createNotification(userId: string, input: NotificationInpu
       readAt: null,
       createdAt: new Date(row.created_at).toISOString(),
     });
+
+    // Also push it, for the case the socket cannot cover: Veylo closed entirely.
+    //
+    // Safe to send verbatim because these titles and bodies are composed here, from metadata
+    // this server already holds, and are generic by construction — "Sent you a message", never
+    // the message. The server has only ciphertext, so there is nothing else it could say.
+    //
+    // Deliberately not awaited: a push service having a bad minute must not slow down, or
+    // fail, the request that is delivering the actual message.
+    const conversationId = (row.data as { conversationId?: string } | null)?.conversationId;
+    void sendPush(userId, {
+      title: row.title,
+      body: row.body,
+      path: conversationId ? `/app/c/${conversationId}` : '/app/notifications',
+      // One notification per conversation at a time: ten messages should not stack into ten
+      // separate notifications the recipient has to dismiss one by one.
+      tag: conversationId ? `conversation:${conversationId}` : `notification:${row.id}`,
+    }).catch((error) => console.error('[push] send failed', error));
   }
   return row;
 }

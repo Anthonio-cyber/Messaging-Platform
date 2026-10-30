@@ -9,6 +9,7 @@ import {
   startCall,
   type CallKind,
 } from '../services/call.service.js';
+import { sendPush } from '../services/push.service.js';
 
 /**
  * WebRTC signalling.
@@ -65,6 +66,20 @@ export function registerCallHandlers(
             avatarUrl: avatarUrl(caller?.avatar_key ?? null),
           },
         });
+
+        // A socket only reaches a device with Veylo open. Push reaches a closed one — which,
+        // for a call, is the case that matters most: a ringing phone in a pocket.
+        //
+        // Marked urgent with a short TTL. A push service will wake a dozing device for this,
+        // and a call notification arriving after the caller has given up is worse than useless,
+        // so it expires rather than queues.
+        void sendPush(calleeId, {
+          title: `${displayName} is calling`,
+          body: kind === 'video' ? 'Incoming video call' : 'Incoming voice call',
+          path: `/app/c/${call.conversation_id}`,
+          tag: `call:${call.id}`,
+          urgent: true,
+        }).catch((error) => console.error('[push] call notification failed', error));
 
         ok(ack, { callId: call.id, calleeId });
       } catch (error) {

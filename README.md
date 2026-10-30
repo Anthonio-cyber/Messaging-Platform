@@ -25,12 +25,15 @@ you@veylo.chat  ←  the only thing you share
 | Messaging | Direct and group conversations, replies, edits, deletes (for me / for everyone), reactions, pins, forwards, copy, attachments, message search over decrypted history |
 | Message requests | A first approach queues as a request; accept, decline, or block. Nothing lands in an inbox uninvited |
 | Groups | Owner/admin/member roles, permission matrix, invite links, add/remove, ownership transfer, leave, delete |
+| Status posts | Text or image posts that expire after 24 hours, encrypted per recipient like a group message, with view receipts and a reach count shown before posting |
+| Notifications | In-app while a tab is backgrounded, written on the device from the decrypted message; Web Push for messages and calls while Veylo is closed |
+| Calls | One-to-one voice and video over WebRTC, with TURN relay support for restrictive networks |
 | Realtime | Socket.IO with per-socket authorisation, typing indicators, presence, delivery and read receipts, live notifications — with an automatic polling fallback for hosts that cannot hold a WebSocket |
 | Privacy | Who can contact you, discovery, online status, last seen, avatar, profile visibility, read receipts, typing indicators — enforced in the serializer and in SQL |
 | Safety | Blocking, abuse reports with optional reporter-supplied excerpts, report queue |
 | Admin | Role-gated dashboard: stats, user management, suspend/ban/restore, role changes, report review, security feed, audit log |
 | Security | CSRF double-submit, CORS allowlist, CSP, HSTS, layered rate limiting, durable brute-force detection, session expiry and idle timeout, unfamiliar-login alerts |
-| Storage | S3-compatible object storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO) with a local-disk driver for development |
+| Storage | S3-compatible object storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO), a Postgres driver for deployments with no bucket, and a local-disk driver for development |
 
 ---
 
@@ -194,9 +197,20 @@ npm test
 
 Set `TEST_DATABASE_URL` to point somewhere else.
 
-`npm run e2e` adds the check no server-side test can make: it drives two real browsers and
-asserts that a message encrypted in one is decryptable in the other, arriving in realtime.
-See `e2e/README.md`.
+Five browser suites add the checks no server-side test can make, each driving real browsers:
+
+| Command | What only a browser can prove |
+| --- | --- |
+| `npm run e2e` | A message encrypted in one browser is decryptable in another, in realtime |
+| `npm run e2e:status` | A status sealed on one device opens on another, and not for a non-contact |
+| `npm run e2e:calls` | A real WebRTC negotiation with synthesised media, including that each side sees the *other* person |
+| `npm run e2e:typing` | Fields keep the caret while someone types slowly, across re-renders |
+| `npm run e2e:mobile` | The shell tracks the on-screen keyboard, including the iOS case where the visual viewport scrolls |
+
+Several of these exist because the bug they cover shipped once: `e2e:typing` types one
+character at a time because `page.fill()` sets a value in one shot and never caught the
+re-render that stole focus, and `e2e:calls` asserts on the remote `<video>` because asserting
+only on `<audio>` let a black far side pass. See `e2e/README.md`.
 
 Both suites, plus a type-check, a production build and a migrations-from-empty check, run in
 CI on every push — see `.github/workflows/ci.yml`.

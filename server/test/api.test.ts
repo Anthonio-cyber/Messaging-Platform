@@ -1042,3 +1042,259 @@ describe('call ICE configuration', () => {
     assert.equal(response.status, 401);
   });
 });
+
+describe('status posting', () => {
+  let author: Account;
+  let follower: Account;
+  let stranger: Account;
+
+  /** Posts a status as `who`, sealed for `audience` plus the author. */
+  async function postStatus(
+    who: Account,
+    audience: Array<{ userId: string; publicKey: string }>,
+    payload: { caption: string; background?: string },
+  ) {
+    const encrypted = await crypto.encryptForMembers(payload, [
+      { userId: who.id, publicKey: who.publicKey },
+      ...audience,
+    ]);
+    return who.client.post<{ status: { id: string } }>('/api/statuses', {
+      kind: 'text',
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+    });
+  }
+
+  before(async () => {
+    author = await registerAccount('poster', 'Status Poster');
+    follower = await registerAccount('follower', 'The Follower');
+    stranger = await registerAccount('outsider', 'An Outsider');
+
+    // A contact edge — which is what puts someone in the audience — is written when a message
+    // request is accepted. The recipient therefore stays on the default 'approved' policy, so
+    // that there is a request to accept at all.
+    const conversation = await author.client.post<{ requestId: string; requiresRequest: boolean }>(
+      '/api/conversations/direct',
+      { identifier: 'follower' },
+    );
+    assert.equal(conversation.status, 201);
+    assert.equal(conversation.body.requiresRequest, true);
+    const accepted = await follower.client.post(
+      `/api/requests/${conversation.body.requestId}/respond`,
+      { decision: 'accepted' },
+    );
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  });
+
+  test('the audience is the author\'s contacts, with their public keys', async () => {
+    const response = await author.client.get<{
+      audience: Array<{ userId: string; publicKey: string | null }>;
+      reach: number;
+    }>('/api/statuses/audience');
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reach, response.body.audience.length);
+    assert.ok(
+      response.body.audience.every((entry) => entry.publicKey),
+      'a recipient with no published key could not be sealed for',
+    );
+  });
+
+  test('a posted status comes back to its author, decryptable', async () => {
+    const audience = await author.client.get<{ audience: Array<{ userId: string; publicKey: string }> }>(
+      '/api/statuses/audience',
+    );
+    const posted = await postStatus(author, audience.body.audience, { caption: 'first post' });
+    assert.equal(posted.status, 201, JSON.stringify(posted.body));
+
+    const list = await author.client.get<{
+      statuses: Array<{ id: string; ciphertext: string; nonce: string; wrappedKey: string }>;
+    }>('/api/statuses');
+    const mine = list.body.statuses.find((entry) => entry.id === posted.body.status.id);
+    assert.ok(mine, 'the author must receive a key for their own status');
+
+    const decrypted = await crypto.decryptMessage(
+      mine!.ciphertext,
+      mine!.nonce,
+      mine!.wrappedKey,
+      author.publicKey,
+      author.privateKey,
+    );
+    assert.equal((decrypted as { caption: string }).caption, 'first post');
+  });
+
+  test('refuses a key addressed to someone outside the audience', async () => {
+    const encrypted = await crypto.encryptForMembers(
+      { caption: 'not for you' },
+      [
+        { userId: author.id, publicKey: author.publicKey },
+        { userId: stranger.id, publicKey: stranger.publicKey },
+      ],
+    );
+    const response = await author.client.post('/api/statuses', {
+      kind: 'text',
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+    });
+    // 403, not 400: this is an attempt to reach someone, not a malformed request.
+    assert.equal(response.status, 403, JSON.stringify(response.body));
+  });
+
+  test('refuses a status with no key for its author', async () => {
+    const audience = await author.client.get<{ audience: Array<{ userId: string; publicKey: string }> }>(
+      '/api/statuses/audience',
+    );
+    const encrypted = await crypto.encryptForMembers({ caption: 'orphan' }, audience.body.audience);
+    const response = await author.client.post('/api/statuses', {
+      kind: 'text',
+      ciphertext: encrypted.ciphertext,
+      nonce: encrypted.nonce,
+      keys: encrypted.keys,
+    });
+    assert.equal(response.status, 400);
+  });
+
+  test('never shows a status to someone who holds no key for it', async () => {
+    const list = await stranger.client.get<{ statuses: unknown[] }>('/api/statuses');
+    assert.equal(list.status, 200);
+    assert.equal(list.body.statuses.length, 0, 'an outsider must see nothing, not ciphertext');
+  });
+
+  test('a contact receives the status and can decrypt it', async () => {
+    const list = await follower.client.get<{
+      statuses: Array<{ id: string; ciphertext: string; nonce: string; wrappedKey: string; viewed: boolean }>;
+    }>('/api/statuses');
+    assert.ok(list.body.statuses.length > 0, 'a contact should see the status');
+
+    const decrypted = await crypto.decryptMessage(
+      list.body.statuses[0]!.ciphertext,
+      list.body.statuses[0]!.nonce,
+      list.body.statuses[0]!.wrappedKey,
+      follower.publicKey,
+      follower.privateKey,
+    );
+    assert.equal((decrypted as { caption: string }).caption, 'first post');
+    assert.equal(list.body.statuses[0]!.viewed, false, 'unopened statuses start unviewed');
+  });
+
+  test('records a view and shows it to the author only', async () => {
+    const list = await follower.client.get<{ statuses: Array<{ id: string }> }>('/api/statuses');
+    const statusId = list.body.statuses[0]!.id;
+
+    const viewed = await follower.client.post(`/api/statuses/${statusId}/view`, {});
+    assert.equal(viewed.status, 200);
+
+    const viewers = await author.client.get<{ viewers: Array<{ userId: string }> }>(
+      `/api/statuses/${statusId}/viewers`,
+    );
+    assert.equal(viewers.status, 200);
+    assert.ok(
+      viewers.body.viewers.some((entry) => entry.userId === follower.id),
+      'the author should see who opened it',
+    );
+
+    // Someone else's view list is not theirs to read, even holding a key for the status.
+    const peeking = await follower.client.get(`/api/statuses/${statusId}/viewers`);
+    assert.equal(peeking.status, 404);
+  });
+
+  test('a viewer with read receipts off is not recorded', async () => {
+    const quiet = await registerAccount('quietviewer', 'Quiet Viewer');
+    await quiet.client.patch('/api/users/me/privacy', { readReceipts: false });
+    const invite = await author.client.post<{ requestId: string }>('/api/conversations/direct', {
+      identifier: 'quietviewer',
+    });
+    await quiet.client.post(`/api/requests/${invite.body.requestId}/respond`, { decision: 'accepted' });
+
+    const audience = await author.client.get<{ audience: Array<{ userId: string; publicKey: string }> }>(
+      '/api/statuses/audience',
+    );
+    const posted = await postStatus(author, audience.body.audience, { caption: 'who is watching' });
+    assert.equal(posted.status, 201);
+    const statusId = posted.body.status.id;
+
+    await quiet.client.post(`/api/statuses/${statusId}/view`, {});
+    const viewers = await author.client.get<{ viewers: Array<{ userId: string }> }>(
+      `/api/statuses/${statusId}/viewers`,
+    );
+    assert.equal(
+      viewers.body.viewers.some((entry) => entry.userId === quiet.id),
+      false,
+      'receipts off means the view is never written, so there is nothing to leak later',
+    );
+  });
+
+  test('status_audience=nobody empties the audience', async () => {
+    const hermit = await registerAccount('hermit', 'The Hermit');
+    const invite = await author.client.post<{ requestId: string }>('/api/conversations/direct', {
+      identifier: 'hermit',
+    });
+    await hermit.client.post(`/api/requests/${invite.body.requestId}/respond`, { decision: 'accepted' });
+
+    await hermit.client.patch('/api/users/me/privacy', { statusAudience: 'nobody' });
+    const audience = await hermit.client.get<{ reach: number }>('/api/statuses/audience');
+    assert.equal(audience.body.reach, 0);
+  });
+
+  test('only the author can delete a status', async () => {
+    const audience = await author.client.get<{ audience: Array<{ userId: string; publicKey: string }> }>(
+      '/api/statuses/audience',
+    );
+    const posted = await postStatus(author, audience.body.audience, { caption: 'temporary' });
+    const statusId = posted.body.status.id;
+
+    const notYours = await follower.client.del(`/api/statuses/${statusId}`);
+    assert.equal(notYours.status, 404);
+
+    const removed = await author.client.del(`/api/statuses/${statusId}`);
+    assert.equal(removed.status, 200);
+
+    const after = await follower.client.get<{ statuses: Array<{ id: string }> }>('/api/statuses');
+    assert.equal(
+      after.body.statuses.some((entry) => entry.id === statusId),
+      false,
+      'a deleted status stops being served immediately, not on the next sweep',
+    );
+  });
+
+  test('requires a session', async () => {
+    const anonymous = new ApiClient(server.url);
+    await anonymous.bootstrap();
+    assert.equal((await anonymous.get('/api/statuses')).status, 401);
+  });
+});
+
+describe('push notification subscriptions', () => {
+  let subscriber: Account;
+
+  before(async () => {
+    subscriber = await registerAccount('pushuser', 'Push User');
+  });
+
+  test('reports that push is unconfigured rather than offering a dead switch', async () => {
+    const response = await subscriber.client.get<{ enabled: boolean; publicKey: string | null; devices: number }>(
+      '/api/notifications/push/key',
+    );
+    assert.equal(response.status, 200);
+    // No VAPID keys in the test environment, which is a supported deployment shape.
+    assert.equal(response.body.enabled, false);
+    assert.equal(response.body.publicKey, null);
+    assert.equal(response.body.devices, 0);
+  });
+
+  test('refuses a subscription when the deployment has no keys', async () => {
+    const response = await subscriber.client.post('/api/notifications/push/subscribe', {
+      endpoint: 'https://push.example.com/abc',
+      keys: { p256dh: 'key', auth: 'auth' },
+    });
+    assert.equal(response.status, 400, 'storing a subscription it could never use would be a lie');
+  });
+
+  test('requires a session', async () => {
+    const anonymous = new ApiClient(server.url);
+    await anonymous.bootstrap();
+    assert.equal((await anonymous.get('/api/notifications/push/key')).status, 401);
+  });
+});

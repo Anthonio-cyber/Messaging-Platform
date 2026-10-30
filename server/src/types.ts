@@ -45,6 +45,8 @@ export interface PrivacySettingsRow {
   discoverable: boolean;
   read_receipts: boolean;
   typing_indicators: boolean;
+  /** Who gets a key when this account posts a status. No 'everyone': keys are per recipient. */
+  status_audience: 'contacts' | 'nobody';
   updated_at: Date;
 }
 
