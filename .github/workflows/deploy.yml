@@ -1,0 +1,64 @@
+name: Deploy
+
+# Deploys are done by hand from the Render dashboard, so this runs on request only —
+# never on a push.
+#
+# It used to fire automatically after CI, which is why it is still here rather than
+# deleted: it is one secret away from working again. Render cannot receive push
+# webhooks for this repository (it is connected by URL, not through Render's GitHub
+# App), so without something on the GitHub side a push deploys nothing.
+#
+# To go back to deploying on every green build:
+#   1. Render dashboard → the "veylo" service → Settings → Deploy Hook → copy the URL.
+#   2. GitHub → this repository → Settings → Secrets and variables → Actions →
+#      New repository secret → name it RENDER_DEPLOY_HOOK_URL and paste the URL.
+#   3. Restore the `workflow_run` trigger below, in place of `workflow_dispatch`.
+#
+# Left on `workflow_dispatch` it costs nothing and shows no failed check: it only runs
+# when somebody presses Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA to deploy (defaults to the branch head)'
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-render
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Trigger Render deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call the Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          COMMIT: ${{ inputs.ref || github.sha }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            # Deliberately fatal. This used to warn and exit 0, which made the job green while
+            # deploying nothing — a release that silently never happened, reported as a success.
+            # A red Deploy is the accurate signal that auto-deploy is not configured yet, and it
+            # cannot block anything: CI has already passed by the time this runs.
+            echo "::error::RENDER_DEPLOY_HOOK_URL is not set, so nothing was deployed."
+            echo "Render dashboard → the service → Settings → Deploy Hook, then add the URL under"
+            echo "this repository's Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          echo "Deploying $COMMIT"
+          # The hook takes the commit to build, so the deploy matches the commit CI checked
+          # rather than whatever happens to be at the branch head by the time this runs.
+          status=$(curl --silent --show-error --output /dev/stderr --write-out '%{http_code}' \
+            --max-time 30 "$HOOK&ref=$COMMIT")
+
+          if [ "$status" != "200" ] && [ "$status" != "201" ]; then
+            echo "::error::Render returned HTTP $status."
+            exit 1
+          fi
+          echo "Render accepted the deploy."
