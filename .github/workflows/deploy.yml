@@ -1,24 +1,29 @@
 name: Deploy
 
-# Render can only receive push webhooks from repositories connected through its
-# GitHub App. This repository is connected to Render by URL, which gives Render no
-# webhook to listen to — so pushes here would never deploy on their own.
+# Deploys are done by hand from the Render dashboard, so this runs on request only —
+# never on a push.
 #
-# This workflow closes that gap from the GitHub side: when CI passes on the
-# deployment branch, it calls the service's deploy hook. The result is the same
-# auto-deploy behaviour, with the bonus that a red build never reaches production.
+# It used to fire automatically after CI, which is why it is still here rather than
+# deleted: it is one secret away from working again. Render cannot receive push
+# webhooks for this repository (it is connected by URL, not through Render's GitHub
+# App), so without something on the GitHub side a push deploys nothing.
 #
-# One-time setup (the hook URL contains a key, so it cannot live in this file):
+# To go back to deploying on every green build:
 #   1. Render dashboard → the "veylo" service → Settings → Deploy Hook → copy the URL.
 #   2. GitHub → this repository → Settings → Secrets and variables → Actions →
 #      New repository secret → name it RENDER_DEPLOY_HOOK_URL and paste the URL.
+#   3. Restore the `workflow_run` trigger below, in place of `workflow_dispatch`.
 #
-# Until that secret exists the job skips with an explanation rather than failing.
+# Left on `workflow_dispatch` it costs nothing and shows no failed check: it only runs
+# when somebody presses Run workflow.
 
 on:
-  workflow_run:
-    workflows: ['CI']
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA to deploy (defaults to the branch head)'
+        required: false
+        type: string
 
 concurrency:
   group: deploy-render
@@ -28,16 +33,12 @@ jobs:
   render:
     name: Trigger Render deploy
     runs-on: ubuntu-latest
-    # Only the branch Render is configured to serve, and only when CI went green.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'claude/private-messaging-platform-zwybqc'
 
     steps:
       - name: Call the Render deploy hook
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-          COMMIT: ${{ github.event.workflow_run.head_sha }}
+          COMMIT: ${{ inputs.ref || github.sha }}
         run: |
           if [ -z "$HOOK" ]; then
             # Deliberately fatal. This used to warn and exit 0, which made the job green while
