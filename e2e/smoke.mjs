@@ -57,6 +57,32 @@ async function main() {
     await page.waitForURL('**/app', { timeout: 60_000 });
   }
 
+  /**
+   * Types into a directory search and waits for a result.
+   *
+   * page.fill() sets the value and dispatches one input event. On a slow runner that event can
+   * land before React has attached its onChange, so the keystroke reaches the DOM, the store
+   * never hears about it, the 300ms debounce never starts, and the search simply never runs —
+   * which looks exactly like "no results" until the timeout. CI hit this once on a step that
+   * passes every time locally.
+   *
+   * Re-entering the term re-fires the event against handlers that are certainly attached by
+   * then, so one retry turns a lost keystroke into a slow search rather than a failed run.
+   */
+  async function searchDirectory(page, field, term, expected) {
+    const locator = typeof field === 'string' ? page.locator(field) : field;
+    for (const attempt of [0, 1]) {
+      await locator.fill('');
+      await locator.fill(term);
+      const found = await page
+        .waitForSelector(expected, { timeout: attempt === 0 ? 12_000 : 25_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (found) return;
+    }
+    throw new Error(`directory search for "${term}" never returned ${expected}`);
+  }
+
   try {
     const alice = await open('alice');
     const bob = await open('bob');
@@ -74,8 +100,12 @@ async function main() {
 
     step('Message requests');
     await alice.click('button[aria-label="New message"]');
-    await alice.fill('input[aria-label="Search for someone"]', bobName);
-    await alice.waitForSelector(`text=${bobName}@veylo.chat`, { timeout: 20_000 });
+    await searchDirectory(
+      alice,
+      'input[aria-label="Search for someone"]',
+      bobName,
+      `text=${bobName}@veylo.chat`,
+    );
     pass('directory search finds an account by username');
 
     await alice.click(`button:has-text("${bobName}@veylo.chat")`);
@@ -146,8 +176,12 @@ async function main() {
     await alice.goto(`${BASE}/app`, { waitUntil: 'networkidle' });
     await alice.click('button[aria-label="New group"]');
     await alice.getByLabel('Group name').fill('Weeknight Cooking');
-    await alice.getByLabel('Add people').fill(bobName);
-    await alice.waitForSelector(`button:has-text("${bobName}@veylo.chat")`, { timeout: 20_000 });
+    await searchDirectory(
+      alice,
+      alice.getByLabel('Add people'),
+      bobName,
+      `button:has-text("${bobName}@veylo.chat")`,
+    );
     await alice.click(`button:has-text("${bobName}@veylo.chat")`);
     await alice.locator('[role="dialog"] button:has-text("Create group")').click();
     await alice.waitForURL('**/app/c/**', { timeout: 30_000 });
@@ -171,10 +205,12 @@ async function main() {
     await alice.click('button[aria-label="Conversation details"]');
     await alice.waitForSelector('button:has-text("Add people")', { timeout: 20_000 });
     await alice.click('button:has-text("Add people")');
-    await alice.fill('input[aria-label="Search for someone to add"]', carolName);
-    await alice.waitForSelector(`[role="dialog"] button:has-text("${carolName}@veylo.chat")`, {
-      timeout: 20_000,
-    });
+    await searchDirectory(
+      alice,
+      'input[aria-label="Search for someone to add"]',
+      carolName,
+      `[role="dialog"] button:has-text("${carolName}@veylo.chat")`,
+    );
     await alice.click(`[role="dialog"] button:has-text("${carolName}@veylo.chat")`);
     await alice.locator('[role="dialog"] button:has-text("Add to group")').click();
     await alice.waitForSelector('text=Added 1 person to the group', { timeout: 20_000 });

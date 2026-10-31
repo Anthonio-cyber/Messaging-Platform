@@ -58,8 +58,19 @@ async function main() {
     // Becoming contacts is what puts someone in the audience, and that happens when a message
     // request is accepted — so the two have to go through that first.
     await poster.click('button[aria-label="New message"]');
+    // Re-entered once if the first attempt finds nothing: page.fill() dispatches a single input
+    // event, and on a slow runner that can land before React attaches onChange, so the debounce
+    // never starts and the search never runs. Smoke hit exactly that once in CI.
     await poster.fill('input[aria-label="Search for someone"]', viewerName);
-    await poster.waitForSelector(`text=${viewerName}@veylo.chat`, { timeout: 20_000 });
+    const found = await poster
+      .waitForSelector(`text=${viewerName}@veylo.chat`, { timeout: 12_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!found) {
+      await poster.fill('input[aria-label="Search for someone"]', '');
+      await poster.fill('input[aria-label="Search for someone"]', viewerName);
+      await poster.waitForSelector(`text=${viewerName}@veylo.chat`, { timeout: 25_000 });
+    }
     await poster.click(`button:has-text("${viewerName}@veylo.chat")`);
     await poster.waitForURL('**/app/c/**', { timeout: 30_000 });
     await poster.fill('textarea[aria-label="Message"]', 'hello, accept me');

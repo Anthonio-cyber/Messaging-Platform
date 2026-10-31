@@ -40,9 +40,14 @@ jobs:
           COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [ -z "$HOOK" ]; then
-            echo "::warning::RENDER_DEPLOY_HOOK_URL is not set, so nothing was deployed."
-            echo "Add it under Settings → Secrets and variables → Actions to enable auto-deploy."
-            exit 0
+            # Deliberately fatal. This used to warn and exit 0, which made the job green while
+            # deploying nothing — a release that silently never happened, reported as a success.
+            # A red Deploy is the accurate signal that auto-deploy is not configured yet, and it
+            # cannot block anything: CI has already passed by the time this runs.
+            echo "::error::RENDER_DEPLOY_HOOK_URL is not set, so nothing was deployed."
+            echo "Render dashboard → the service → Settings → Deploy Hook, then add the URL under"
+            echo "this repository's Settings → Secrets and variables → Actions."
+            exit 1
           fi
 
           echo "Deploying $COMMIT"
